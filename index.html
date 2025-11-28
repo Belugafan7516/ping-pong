@@ -113,30 +113,32 @@
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL VARIABLES PROVIDED BY THE ENVIRONMENT ---
-        let firebaseConfig = {};
         const statusEl = document.getElementById('game-status');
         const GLOBAL_MATCH_DOC_ID = 'match_state';
 
-        // Load Firebase configuration from the environment variable (which is a JSON string)
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-             try {
-                firebaseConfig = JSON.parse(__firebase_config);
-            } catch (e) {
-                console.error("Failed to parse __firebase_config JSON string:", e);
-            }
-        }
+        // --- HARDCODED FIREBASE CONFIGURATION (Provided by user) ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDGTc7KZXnOpT2OihaPU-UAt4GPjIZe1Ks",
+            authDomain: "pong-4c2e4.firebaseapp.com",
+            projectId: "pong-4c2e4",
+            storageBucket: "pong-4c2e4.firebasestorage.app",
+            messagingSenderId: "999682292766",
+            appId: "1:999682292766:web:ba8aa3a5d81a8ea840420f",
+            measurementId: "G-QN6XQG2NRL"
+        };
+        
+        // Use the provided appId directly, or fall back to environment variable if defined.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.appId;
+        const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
 
         // --- CRITICAL CONFIG CHECK ---
         if (!firebaseConfig || !firebaseConfig.projectId) {
-            statusEl.textContent = "FATAL ERROR: Firebase Configuration Missing. Cannot initialize DB.";
+            statusEl.textContent = "FATAL ERROR: Firebase Configuration is incomplete. Cannot initialize DB.";
             statusEl.classList.add('error-message');
             console.error("CRITICAL ERROR: Firebase configuration is missing or invalid. Execution halted.");
             throw new Error("Missing Firebase projectId");
         }
         
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
-
         // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
         let app, db, auth;
         let userId = '';
@@ -226,7 +228,7 @@
             console.log("Global match state initialized.");
         }
 
-        // --- AUTHENTICATION (REFACTORED AND FIXED FLOW) ---
+        // --- AUTHENTICATION (FIXED FLOW) ---
 
         /**
          * Handles the full sign-in process and sets up the onAuthStateChanged listener.
@@ -236,10 +238,21 @@
                 // 1. Attempt persistent sign-in first
                 await setPersistence(auth, browserSessionPersistence);
                 
+                let authSuccessful = false;
+
+                // 1a. Try to sign in with custom token if available
                 if (initialToken) {
-                    await signInWithCustomToken(auth, initialToken);
-                } else {
-                    // Use signInAnonymously if no custom token is provided
+                    try {
+                        await signInWithCustomToken(auth, initialToken);
+                        authSuccessful = true;
+                    } catch (tokenError) {
+                        // If custom token fails (e.g., auth/custom-token-mismatch), log and proceed to anonymous sign-in
+                        console.warn("Custom token sign-in failed. Falling back to anonymous sign-in:", tokenError);
+                    }
+                }
+
+                // 1b. If custom auth wasn't attempted or failed, sign in anonymously
+                if (!authSuccessful) {
                     await signInAnonymously(auth);
                 }
                 
@@ -268,6 +281,7 @@
                     }
                 });
             } catch (error) {
+                // This catches if the anonymous sign-in failed
                 console.error("Authentication initialization failed:", error);
                 statusEl.textContent = `Error: Authentication failed (${error.code}). Cannot play.`;
                 statusEl.classList.add('error-message');
