@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer Pong</title>
+    <title>Global Multiplayer Pong</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <style>
@@ -46,32 +46,38 @@
             text-align: left;
             border-bottom: 1px dashed #48bb78;
         }
+        .error-message {
+            color: #f56565; /* Red */
+            font-size: 1rem;
+            text-align: center;
+            padding: 10px;
+            border: 2px solid #f56565;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center min-h-screen">
     <div id="game-container" class="space-y-6">
-        <h1 class="text-3xl text-center text-retro mb-6">PONG MULTIPLAYER</h1>
+        <h1 class="text-3xl text-center text-retro mb-6">GLOBAL PONG MATCH</h1>
 
-        <!-- Status and Room Info -->
+        <!-- Status and Role Info -->
         <div class="flex flex-col md:flex-row justify-between items-center text-sm mb-4 space-y-2 md:space-y-0 text-retro">
             <span id="user-id">User ID: Loading...</span>
-            <span id="current-room-id">Room: N/A</span>
-            <span id="player-role">Role: Spectator</span>
+            <span id="player-role" class="text-xl font-bold">Role: Spectator</span>
+            <span id="current-room-id">Match: Global</span>
         </div>
 
         <!-- Canvas for the Pong Game -->
         <canvas id="pong-canvas" width="800" height="400"></canvas>
 
         <!-- Controls and Status -->
-        <div id="game-status" class="text-center text-lg text-red-500 my-4">Initializing Firebase...</div>
-
+        <div id="game-status" class="text-center text-lg text-red-500 my-4">Initializing...</div>
         <div id="game-controls" class="flex flex-wrap justify-center gap-4">
-            <input type="text" id="room-name-input" placeholder="Room Name (e.g., Match1)"
-                   class="p-2 border-4 border-[#48bb78] bg-[#1a202c] text-[#48bb78] rounded-md focus:outline-none w-full md:w-1/4">
-            <button id="create-room-btn" class="btn-retro px-4 py-2 rounded-lg text-sm w-full md:w-auto">Create Room</button>
-            <button id="join-room-btn" class="btn-retro px-4 py-2 rounded-lg text-sm w-full md:w-auto">Join Room</button>
-            <button id="leave-room-btn" class="btn-retro px-4 py-2 rounded-lg text-sm w-full md:w-auto" disabled>Leave Room</button>
+            <button id="join-match-btn" class="btn-retro px-6 py-3 rounded-lg text-lg w-full md:w-auto">Claim Player Spot</button>
+            <button id="leave-match-btn" class="btn-retro px-6 py-3 rounded-lg text-lg w-full md:w-auto" disabled>Relinquish Spot</button>
         </div>
+        
+        <p class="text-sm text-center text-retro opacity-70 mt-2">P1 controls physics. Use W/S or Arrow Keys to move your paddle.</p>
 
         <!-- Leaderboard Section -->
         <div class="mt-8">
@@ -90,66 +96,79 @@
             </table>
         </div>
     </div>
+    
+    <!-- Image of how the Global Match Architecture works -->
+    <div class="text-center text-retro pt-10">
+        <h3 class="text-xl mb-4">Global Match Architecture</h3>
+        <p class="text-sm mb-4"></p>
+    </div>
 
     <script type="module">
         // Import Firebase modules
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
-            getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, 
-            collection, query, where, getDocs, addDoc, serverTimestamp, setLogLevel 
+            getFirestore, doc, setDoc, updateDoc, onSnapshot, 
+            collection, query, addDoc, serverTimestamp, setLogLevel, runTransaction 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL VARIABLES PROVIDED BY THE ENVIRONMENT ---
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        let firebaseConfig = {};
+        const statusEl = document.getElementById('game-status');
+        const GLOBAL_MATCH_DOC_ID = 'match_state';
+
+        // Load Firebase configuration from the environment variable (which is a JSON string)
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+             try {
+                firebaseConfig = JSON.parse(__firebase_config);
+            } catch (e) {
+                console.error("Failed to parse __firebase_config JSON string:", e);
+            }
+        }
+
+        // --- CRITICAL CONFIG CHECK ---
+        if (!firebaseConfig || !firebaseConfig.projectId) {
+            statusEl.textContent = "FATAL ERROR: Firebase Configuration Missing. Cannot initialize DB.";
+            statusEl.classList.add('error-message');
+            console.error("CRITICAL ERROR: Firebase configuration is missing or invalid. Execution halted.");
+            throw new Error("Missing Firebase projectId");
+        }
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
 
         // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
         let app, db, auth;
         let userId = '';
-        let isAuthReady = false;
+        let isAuthReady = false; // Flag to gate Firestore operations
 
-        // CRITICAL DIAGNOSTIC CHECK: Log the configuration data
-        console.log('--- Firebase Initialization Check ---');
-        console.log('App ID:', appId);
-        console.log('Config received:', firebaseConfig); 
-        console.log('--- End Check ---');
-
-        // Check for the minimum required config (projectId)
-        if (!firebaseConfig || Object.keys(firebaseConfig).length === 0 || !firebaseConfig.projectId) {
-            const statusEl = document.getElementById('game-status');
-            statusEl.textContent = "Initialization Failed: Missing Firebase Configuration (projectId error). Check console for details.";
-            statusEl.classList.add('text-red-500');
-            console.error("CRITICAL ERROR: Firebase configuration is missing or invalid. Check the environment configuration.");
-            throw new Error("Missing Firebase projectId");
-        }
-        
-        // Initialize Firebase
         app = initializeApp(firebaseConfig);
         db = getFirestore(app);
         auth = getAuth(app);
-        setLogLevel('debug'); // Enable detailed Firebase logging
+        setLogLevel('debug');
 
         // State variables for the game
-        let currentRoomId = null;
         let isPlayer1 = false;
         let isPlayer2 = false;
+        let isSpectator = true;
         let isGameRunning = false;
-        let unsubscribeRoom = null;
+        let unsubscribeMatch = null;
         let unsubscribeLeaderboard = null;
 
         // --- PONG GAME STATE ---
         const canvas = document.getElementById('pong-canvas');
         const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('game-status');
 
         const PADDLE_HEIGHT = 80;
         const PADDLE_WIDTH = 10;
         const BALL_RADIUS = 6;
-        const PADDLE_SPEED = 5; // Pixels per frame move
+        const PADDLE_SPEED = 5;
+        const WIN_SCORE = 10;
         
+        // Local state, synchronized with Firestore
         let gameState = {
+            player1Id: null,
+            player2Id: null,
             paddle1Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
             paddle2Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
             ballX: canvas.width / 2,
@@ -158,32 +177,412 @@
             ballDy: 4,
             score1: 0,
             score2: 0,
+            status: 'WaitingForPlayers', // 'WaitingForPlayers', 'Playing', 'GameOver'
             lastUpdateTime: Date.now(),
+            lastSyncTime: Date.now(),
         };
 
-        // --- UTILITY FUNCTIONS ---
+        // --- UTILITY & FIREBASE PATH FUNCTIONS ---
 
-        /**
-         * Safely generates the Firestore collection path for public data.
-         * @param {string} collectionName The name of the collection (e.g., 'pong_rooms').
-         * @returns {string} The full Firestore path.
-         */
         function getPublicCollectionPath(collectionName) {
             return `artifacts/${appId}/public/data/${collectionName}`;
         }
 
-        /**
-         * Safely generates the Firestore document reference for a room.
-         * @param {string} roomId The ID of the room.
-         * @returns {object} Firestore Document Reference.
-         */
-        function getRoomDocRef(roomId) {
-            return doc(db, getPublicCollectionPath('pong_rooms'), roomId);
+        function getMatchDocRef() {
+            return doc(db, getPublicCollectionPath('global_pong'), GLOBAL_MATCH_DOC_ID);
         }
 
         /**
-         * Renders the current state of the game on the canvas.
+         * Resets the local ball position and direction for serving.
          */
+        function resetBall() {
+            gameState.ballX = canvas.width / 2;
+            gameState.ballY = canvas.height / 2;
+            gameState.ballDx = (Math.random() > 0.5 ? 4 : -4);
+            gameState.ballDy = (Math.random() * 8 - 4);
+        }
+        
+        /**
+         * Initializes or resets the global match state document in Firestore.
+         */
+        async function initializeMatchState(docRef) {
+            const initialBallDx = (Math.random() > 0.5 ? 4 : -4);
+            const initialBallDy = (Math.random() * 8 - 4);
+
+            await setDoc(docRef, {
+                player1Id: null,
+                player2Id: null,
+                paddle1Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
+                paddle2Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
+                ballX: canvas.width / 2,
+                ballY: canvas.height / 2,
+                ballDx: initialBallDx, 
+                ballDy: initialBallDy, 
+                score1: 0,
+                score2: 0,
+                status: 'WaitingForPlayers',
+                lastUpdateTime: serverTimestamp(),
+            });
+            console.log("Global match state initialized.");
+        }
+
+        // --- AUTHENTICATION (REFACTORED AND FIXED FLOW) ---
+
+        /**
+         * Handles the full sign-in process and sets up the onAuthStateChanged listener.
+         */
+        async function authenticateAndSetup() {
+             try {
+                // 1. Attempt persistent sign-in first
+                await setPersistence(auth, browserSessionPersistence);
+                
+                if (initialToken) {
+                    await signInWithCustomToken(auth, initialToken);
+                } else {
+                    // Use signInAnonymously if no custom token is provided
+                    await signInAnonymously(auth);
+                }
+                
+                // 2. Set up the definitive listener
+                onAuthStateChanged(auth, (user) => {
+                    if (user && user.uid) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        document.getElementById('user-id').textContent = `User ID: ${userId}`;
+                        statusEl.textContent = "Authentication complete. Starting game subscription...";
+                        
+                        // CRITICAL FIX: Only subscribe when auth is confirmed and ready.
+                        subscribeToMatch();
+                        fetchLeaderboard();
+                        
+                    } else {
+                        // User signed out or failed auth initially
+                        isAuthReady = false;
+                        userId = '';
+                        document.getElementById('user-id').textContent = `User ID: Not Signed In`;
+                        statusEl.textContent = "Authentication failed. Cannot connect to match.";
+
+                        // Clean up listeners if they exist
+                        if (unsubscribeMatch) unsubscribeMatch();
+                        if (unsubscribeLeaderboard) unsubscribeLeaderboard();
+                    }
+                });
+            } catch (error) {
+                console.error("Authentication initialization failed:", error);
+                statusEl.textContent = `Error: Authentication failed (${error.code}). Cannot play.`;
+                statusEl.classList.add('error-message');
+                isAuthReady = false;
+            }
+        }
+
+
+        // --- PLAYER SPOT MANAGEMENT ---
+
+        /**
+         * Attempts to claim an open player spot (P1 or P2) using a Firestore Transaction.
+         */
+        async function claimPlayerSpot() {
+            if (!isAuthReady) {
+                alertUser("Please wait for authentication to complete.");
+                return;
+            }
+            const docRef = getMatchDocRef();
+
+            try {
+                const claimedRole = await runTransaction(db, async (transaction) => {
+                    const matchDoc = await transaction.get(docRef);
+                    let updateData = {};
+                    let claimedRole = null;
+
+                    if (!matchDoc.exists()) {
+                        // Document doesn't exist, initialize it and claim P1
+                        transaction.set(docRef, {
+                            player1Id: userId,
+                            player2Id: null,
+                            paddle1Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
+                            paddle2Y: canvas.height / 2 - PADDLE_HEIGHT / 2,
+                            ballX: canvas.width / 2,
+                            ballY: canvas.height / 2,
+                            ballDx: (Math.random() > 0.5 ? 4 : -4),
+                            ballDy: (Math.random() * 8 - 4),
+                            score1: 0,
+                            score2: 0,
+                            status: 'WaitingForPlayers',
+                            lastUpdateTime: serverTimestamp(),
+                        });
+                        claimedRole = 'Player 1';
+                    } else {
+                        const data = matchDoc.data();
+
+                        // Check if already a player
+                        if (data.player1Id === userId || data.player2Id === userId) {
+                            throw "Already a player in this match.";
+                        }
+
+                        // Try to claim P1 spot
+                        if (!data.player1Id) {
+                            updateData.player1Id = userId;
+                            claimedRole = 'Player 1';
+                        } 
+                        // Try to claim P2 spot
+                        else if (!data.player2Id) {
+                            updateData.player2Id = userId;
+                            claimedRole = 'Player 2';
+                        } else {
+                            throw "No open player spots available. Spectating.";
+                        }
+                        
+                        // If one spot was claimed, check if both are now filled
+                        if (claimedRole && (data.player1Id || claimedRole === 'Player 1') && (data.player2Id || claimedRole === 'Player 2')) {
+                            updateData.status = 'Playing';
+                            // Reset scores and ball when a new match begins
+                            updateData.score1 = 0;
+                            updateData.score2 = 0;
+                            resetBall(); // Recalculate ball physics locally
+                            updateData.ballX = gameState.ballX;
+                            updateData.ballY = gameState.ballY;
+                            updateData.ballDx = gameState.ballDx;
+                            updateData.ballDy = gameState.ballDy;
+                        }
+
+                        if (Object.keys(updateData).length > 0) {
+                             transaction.update(docRef, updateData);
+                        } else {
+                             // This path is usually hit by the 'No open spots' exception
+                        }
+                    }
+                    return claimedRole || 'Spectator';
+                });
+
+                // Transaction successful 
+                alertUser(`Successfully joined the match. Role: ${claimedRole}`);
+
+            } catch (e) {
+                if (typeof e === 'string' && e.includes("No open player spots")) {
+                    alertUser(e); // Spectating message
+                } else if (e !== "Already a player in this match.") {
+                    console.error("Transaction failed:", e);
+                    alertUser("Failed to claim spot. Try again.");
+                }
+            }
+        }
+
+        /**
+         * Relinquishes the currently held player spot (P1 or P2).
+         * This function handles MANUAL relinquishment via the button.
+         */
+        async function relinquishPlayerSpot() {
+            if (!isAuthReady || isSpectator) return;
+            const docRef = getMatchDocRef();
+            let updateData = {};
+            let roleToClear = null;
+
+            if (isPlayer1) {
+                updateData.player1Id = null;
+                updateData.paddle1Y = canvas.height / 2 - PADDLE_HEIGHT / 2;
+                roleToClear = 'Player 1';
+            } else if (isPlayer2) {
+                updateData.player2Id = null;
+                updateData.paddle2Y = canvas.height / 2 - PADDLE_HEIGHT / 2;
+                roleToClear = 'Player 2';
+            } else {
+                return; 
+            }
+
+            // If a player leaves, status should go back to WaitingForPlayers
+            updateData.status = 'WaitingForPlayers';
+
+            try {
+                await updateDoc(docRef, updateData);
+                alertUser(`${roleToClear} spot relinquished. You are now a Spectator.`);
+            } catch (error) {
+                console.error("Error relinquishing spot:", error);
+                alertUser("Failed to relinquish spot. Check console.");
+            }
+        }
+        
+        // --- MATCH SUBSCRIPTION AND STATE HANDLING ---
+
+        function subscribeToMatch() {
+            if (unsubscribeMatch) unsubscribeMatch();
+            if (!isAuthReady || !userId) {
+                console.warn("Auth not ready, skipping match subscription.");
+                return; // Safety guard ensures no subscription attempt while state is unstable
+            }
+
+            const docRef = getMatchDocRef();
+
+            unsubscribeMatch = onSnapshot(docRef, (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    handleMatchUpdate(docSnapshot.data());
+                } else {
+                    // Document was deleted. Re-initialize state.
+                    handleMatchDeletion();
+                }
+            }, (error) => {
+                // This will catch the permissions error if the user isn't fully ready
+                console.error("Error subscribing to global match:", error);
+                alertUser("Lost connection to the global match or permissions error.");
+            });
+            console.log("Match listener attached.");
+        }
+
+        function handleMatchUpdate(matchData) {
+            
+            // 1. Determine User Role
+            isPlayer1 = matchData.player1Id === userId;
+            isPlayer2 = matchData.player2Id === userId;
+            isSpectator = !isPlayer1 && !isPlayer2;
+
+            let roleText = 'Spectator';
+            if (isPlayer1) roleText = 'Player 1 (Host)';
+            else if (isPlayer2) roleText = 'Player 2';
+            
+            document.getElementById('player-role').textContent = `Role: ${roleText}`;
+            
+            // Update UI buttons based on role
+            document.getElementById('join-match-btn').disabled = isPlayer1 || isPlayer2 || !isAuthReady || (matchData.player1Id && matchData.player2Id);
+            document.getElementById('leave-match-btn').disabled = isSpectator || !isAuthReady;
+
+
+            // 2. Update Local Game State
+            Object.assign(gameState, matchData); // Copy all remote data to local state
+            
+            // 3. Update Game Status
+            let statusMessage = '';
+            if (matchData.status === 'Playing') {
+                isGameRunning = true;
+                statusMessage = `Playing: ${matchData.score1} - ${matchData.score2}`;
+            } else if (matchData.status === 'WaitingForPlayers') {
+                isGameRunning = false;
+                const p1Status = matchData.player1Id ? `${matchData.player1Id.substring(0, 8)}...` : 'Open';
+                const p2Status = matchData.player2Id ? `${matchData.player2Id.substring(0, 8)}...` : 'Open';
+                statusMessage = `Waiting for Players: P1: ${p1Status} | P2: ${p2Status}`;
+            } else if (matchData.status === 'GameOver') {
+                isGameRunning = false;
+                statusMessage = `Game Over. Final Score: ${matchData.score1} - ${matchData.score2}. Waiting to restart.`;
+            }
+            
+            statusEl.textContent = statusMessage;
+            statusEl.classList.remove('text-red-500', 'text-yellow-500', 'text-green-500');
+            statusEl.classList.add(isGameRunning ? 'text-yellow-500' : 'text-green-500');
+        }
+
+        function handleMatchDeletion() {
+            alertUser('The global match state document was unexpectedly deleted. Re-initializing...');
+            initializeMatchState(getMatchDocRef());
+        }
+
+        /**
+         * Sends the local game state (ball and scores) to Firestore. Only Player 1 (host) executes physics.
+         */
+        function sendGameUpdate() {
+            if (!isPlayer1 || !isGameRunning) return;
+
+            const updateData = {
+                paddle1Y: gameState.paddle1Y,
+                paddle2Y: gameState.paddle2Y,
+                ballX: gameState.ballX,
+                ballY: gameState.ballY,
+                ballDx: gameState.ballDx,
+                ballDy: gameState.ballDy,
+                score1: gameState.score1,
+                score2: gameState.score2,
+                status: 'Playing',
+                lastUpdateTime: serverTimestamp(),
+            };
+            // Use retry logic (omitted here for brevity, covered by Firestore SDK)
+            updateDoc(getMatchDocRef(), updateData).catch(e => console.error("Error syncing game state:", e));
+        }
+
+        /**
+         * Sends only the local paddle position to Firestore. (P2 sends separately).
+         */
+        function sendPaddleUpdate() {
+            if (!isGameRunning) return;
+
+            if (isPlayer2) {
+                // P2 only updates paddle2Y
+                updateDoc(getMatchDocRef(), { paddle2Y: gameState.paddle2Y }).catch(e => console.error("Error syncing P2 paddle:", e));
+            }
+            // P1's paddle is included in sendGameUpdate()
+        }
+        
+        /**
+         * Checks if a player has won and updates the score/status.
+         * Runs only on P1 (physics host).
+         */
+        function checkWinCondition() {
+            if (!isPlayer1) return;
+
+            if (gameState.score1 >= WIN_SCORE || gameState.score2 >= WIN_SCORE) {
+                let winnerId = gameState.score1 >= WIN_SCORE ? gameState.player1Id : gameState.player2Id;
+                let loserId = gameState.score1 >= WIN_SCORE ? gameState.player2Id : gameState.player1Id;
+                let winnerScore = Math.max(gameState.score1, gameState.score2);
+                let loserScore = Math.min(gameState.score1, gameState.score2);
+
+                recordScore(winnerId, loserId, winnerScore, loserScore);
+
+                // --- MODIFICATION: Auto-relinquish spot by clearing player IDs ---
+                const docRef = getMatchDocRef();
+                updateDoc(docRef, {
+                    player1Id: null, // AUTOMATICALLY RELEASE P1 SPOT
+                    player2Id: null, // AUTOMATICALLY RELEASE P2 SPOT
+                    score1: 0,
+                    score2: 0,
+                    ballX: canvas.width / 2,
+                    ballY: canvas.height / 2,
+                    status: 'WaitingForPlayers', // Back to waiting state
+                }).catch(e => console.error("Error resetting match state:", e));
+            }
+        }
+
+        // --- GAME PHYSICS & RENDERING ---
+
+        function updateLocalGame() {
+            if (!isPlayer1 || !isGameRunning) return;
+
+            // 1. Ball movement
+            gameState.ballX += gameState.ballDx;
+            gameState.ballY += gameState.ballDy;
+
+            // 2. Ball collision with top/bottom walls
+            if (gameState.ballY - BALL_RADIUS < 0 || gameState.ballY + BALL_RADIUS > canvas.height) {
+                gameState.ballDy *= -1;
+            }
+
+            // 3. Ball collision with paddles
+            const paddle1Area = gameState.ballX - BALL_RADIUS < PADDLE_WIDTH;
+            const paddle2Area = gameState.ballX + BALL_RADIUS > canvas.width - PADDLE_WIDTH;
+
+            // Paddle 1 (Left) collision
+            if (paddle1Area && gameState.ballY > gameState.paddle1Y && gameState.ballY < gameState.paddle1Y + PADDLE_HEIGHT) {
+                gameState.ballDx *= -1.05; // Increase speed slightly
+            }
+            
+            // Paddle 2 (Right) collision
+            if (paddle2Area && gameState.ballY > gameState.paddle2Y && gameState.ballY < gameState.paddle2Y + PADDLE_HEIGHT) {
+                gameState.ballDx *= -1.05; // Increase speed slightly
+            }
+
+            // 4. Scoring
+            let scoreUpdate = false;
+            if (gameState.ballX < 0) {
+                gameState.score2++;
+                resetBall();
+                scoreUpdate = true;
+            } else if (gameState.ballX > canvas.width) {
+                gameState.score1++;
+                resetBall();
+                scoreUpdate = true;
+            }
+
+            // 5. Check win condition after scoring
+            if (scoreUpdate) {
+                checkWinCondition();
+            }
+        }
+
         function renderGame() {
             // Background
             ctx.fillStyle = '#000';
@@ -197,14 +596,22 @@
             ctx.moveTo(canvas.width / 2, 0);
             ctx.lineTo(canvas.width / 2, canvas.height);
             ctx.stroke();
-            ctx.setLineDash([]); // Reset line dash
+            ctx.setLineDash([]);
 
             // Paddles
             ctx.fillStyle = '#fff';
-            ctx.fillRect(0, gameState.paddle1Y, PADDLE_WIDTH, PADDLE_HEIGHT); // Paddle 1 (Left)
-            ctx.fillRect(canvas.width - PADDLE_WIDTH, gameState.paddle2Y, PADDLE_WIDTH, PADDLE_HEIGHT); // Paddle 2 (Right)
+            // Highlight current user's paddle
+            const p1Color = isPlayer1 ? '#facc15' : '#fff'; // Yellow highlight for user
+            const p2Color = isPlayer2 ? '#facc15' : '#fff';
+            
+            ctx.fillStyle = p1Color;
+            ctx.fillRect(0, gameState.paddle1Y, PADDLE_WIDTH, PADDLE_HEIGHT);
+            
+            ctx.fillStyle = p2Color;
+            ctx.fillRect(canvas.width - PADDLE_WIDTH, gameState.paddle2Y, PADDLE_WIDTH, PADDLE_HEIGHT);
 
             // Ball
+            ctx.fillStyle = '#fff';
             ctx.beginPath();
             ctx.arc(gameState.ballX, gameState.ballY, BALL_RADIUS, 0, Math.PI * 2);
             ctx.fill();
@@ -217,457 +624,67 @@
             ctx.fillText(gameState.score2, canvas.width * 3 / 4, 40);
         }
 
-        /**
-         * Updates the local game state based on elapsed time.
-         */
-        function updateLocalGame() {
-            if (!isPlayer1 || !isGameRunning) return;
-
-            const currentTime = Date.now();
-            const deltaTime = (currentTime - gameState.lastUpdateTime) / 1000; // Time in seconds
-            gameState.lastUpdateTime = currentTime;
-
-            // Simple physics update (Ball movement)
-            gameState.ballX += gameState.ballDx * 60 * deltaTime;
-            gameState.ballY += gameState.ballDy * 60 * deltaTime;
-
-            // Ball collision with top/bottom walls
-            if (gameState.ballY - BALL_RADIUS < 0 || gameState.ballY + BALL_RADIUS > canvas.height) {
-                gameState.ballDy *= -1;
-            }
-
-            // Ball collision with paddles
-            const paddle1Area = gameState.ballX - BALL_RADIUS < PADDLE_WIDTH;
-            const paddle2Area = gameState.ballX + BALL_RADIUS > canvas.width - PADDLE_WIDTH;
-
-            // Paddle 1 (Left) collision
-            if (paddle1Area && gameState.ballY > gameState.paddle1Y && gameState.ballY < gameState.paddle1Y + PADDLE_HEIGHT) {
-                gameState.ballDx *= -1;
+        // --- GAME LOOP ---
+        function gameLoop() {
+            requestAnimationFrame(gameLoop);
+            
+            // Only P1 runs the physics update
+            if (isPlayer1 && isGameRunning) {
+                updateLocalGame(); 
             }
             
-            // Paddle 2 (Right) collision
-            if (paddle2Area && gameState.ballY > gameState.paddle2Y && gameState.ballY < gameState.paddle2Y + PADDLE_HEIGHT) {
-                gameState.ballDx *= -1;
-            }
-
-            // Scoring
-            if (gameState.ballX < 0) {
-                gameState.score2++;
-                resetBall();
+            // P1 syncs the state regularly (approx 10 times a second)
+            if (isPlayer1 && isGameRunning && Date.now() - gameState.lastSyncTime > 100) { 
                 sendGameUpdate();
-                checkWinCondition();
-            } else if (gameState.ballX > canvas.width) {
-                gameState.score1++;
-                resetBall();
-                sendGameUpdate();
-                checkWinCondition();
-            }
-
-            // Ensure paddles don't move off-screen
-            gameState.paddle1Y = Math.min(Math.max(0, gameState.paddle1Y), canvas.height - PADDLE_HEIGHT);
-            gameState.paddle2Y = Math.min(Math.max(0, gameState.paddle2Y), canvas.height - PADDLE_HEIGHT);
-        }
-
-        /**
-         * Resets the ball position and direction after a score.
-         */
-        function resetBall() {
-            gameState.ballX = canvas.width / 2;
-            gameState.ballY = canvas.height / 2;
-            gameState.ballDx = (Math.random() > 0.5 ? 4 : -4); // Serve to a random direction
-            gameState.ballDy = (Math.random() * 8 - 4); // Random vertical speed
-        }
-
-        /**
-         * Checks if a player has won the game (e.g., first to 10).
-         */
-        function checkWinCondition() {
-            if (!gameState.roomData || !gameState.roomData.player2Id) return; // Must have P2 to end game
-
-            const WIN_SCORE = 10;
-            const P1_ID = gameState.roomData.player1Id;
-            const P2_ID = gameState.roomData.player2Id;
-            
-            // This runs only on P1 (host)
-            if (gameState.score1 >= WIN_SCORE) {
-                endGame(gameState.score1, gameState.score2);
-                // Player 1 wins, Player 2 loses
-                recordScore(P1_ID, P2_ID, gameState.score1, gameState.score2);
-            } else if (gameState.score2 >= WIN_SCORE) {
-                endGame(gameState.score1, gameState.score2);
-                // Player 2 wins, Player 1 loses
-                recordScore(P2_ID, P1_ID, gameState.score2, gameState.score1);
-            }
-        }
-
-        /**
-         * Ends the game and displays the winner.
-         * @param {number} finalScore1 
-         * @param {number} finalScore2 
-         */
-        function endGame(finalScore1, finalScore2) {
-            isGameRunning = false;
-            let message = '';
-            if (finalScore1 > finalScore2) {
-                message = `Player 1 Wins! (${finalScore1}-${finalScore2})`;
-            } else {
-                message = `Player 2 Wins! (${finalScore1}-${finalScore2})`;
-            }
-            statusEl.textContent = `Game Over. ${message}`;
-            statusEl.classList.remove('text-yellow-500');
-            statusEl.classList.add('text-green-500');
-
-            // Optionally, the winner can clear the room or reset it
-            if (isPlayer1) {
-                updateRoom(currentRoomId, { status: 'GameOver' });
-            }
-        }
-        
-        // --- FIRESTORE INTERACTION FUNCTIONS ---
-
-        /**
-         * Handles the authentication state change.
-         */
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                userId = user.uid;
-                // Display full userId string as mandated for multi-user apps.
-                document.getElementById('user-id').textContent = `User ID: ${userId}`;
-            } else {
-                // If user is null, attempt anonymous sign-in (which will trigger this listener again)
-                try {
-                    // Check if we already tried to sign in anonymously
-                    if (!auth.currentUser) {
-                         console.log("No user found, attempting anonymous sign-in...");
-                         await signInAnonymously(auth);
-                    }
-                    userId = auth.currentUser?.uid || '';
-                } catch (error) {
-                    console.error("Anonymous sign-in failed:", error);
-                    statusEl.textContent = "Error: Authentication failed.";
-                }
-            }
-
-            // We are authenticated and have a user ID (even if temporary)
-            if (userId) {
-                isAuthReady = true;
-                statusEl.textContent = "Ready. Use buttons to create or join a room.";
-                
-                // Only fetch data after Firebase services are initialized and auth is complete
-                if (db) { 
-                    console.log(`Authentication successful. User ID: ${userId}. Scheduling fetchLeaderboard in 500ms to avoid race conditions.`);
-                    // FIX: Introduce a small delay to allow Firebase security context to propagate
-                    setTimeout(fetchLeaderboard, 500);
-                } else {
-                     console.error("DB not initialized when attempting to fetch leaderboard after auth.");
-                }
-            }
-        });
-
-        // Use custom token if available, otherwise sign in anonymously
-        if (initialToken) {
-            setPersistence(auth, browserSessionPersistence).then(() => {
-                signInWithCustomToken(auth, initialToken).catch((error) => {
-                    console.error("Custom token sign-in failed, falling back to anonymous:", error);
-                    // The onAuthStateChanged listener will handle the resulting state change
-                });
-            });
-        } else {
-            setPersistence(auth, browserSessionPersistence).then(() => {
-                signInAnonymously(auth).catch((error) => {
-                    console.error("Anonymous sign-in failed:", error);
-                    // The onAuthStateChanged listener will handle the resulting state change
-                });
-            });
-        }
-
-        /**
-         * Creates a new Pong room in Firestore.
-         */
-        async function createRoom() {
-            if (!isAuthReady || currentRoomId) return;
-
-            const roomName = document.getElementById('room-name-input').value.trim();
-            if (!roomName) {
-                alertUser("Please enter a room name.");
-                return;
-            }
-
-            try {
-                const roomData = {
-                    name: roomName,
-                    status: 'Waiting', // Waiting, Ready, Playing, GameOver
-                    player1Id: userId,
-                    player2Id: null,
-                    paddle1Y: gameState.paddle1Y,
-                    paddle2Y: gameState.paddle2Y,
-                    ballX: gameState.ballX,
-                    ballY: gameState.ballY,
-                    ballDx: 4,
-                    ballDy: 4,
-                    score1: 0,
-                    score2: 0,
-                    createdAt: serverTimestamp(),
-                };
-
-                const roomRef = doc(collection(db, getPublicCollectionPath('pong_rooms')));
-                await setDoc(roomRef, roomData);
-                
-                currentRoomId = roomRef.id;
-                isPlayer1 = true;
-                
-                subscribeToRoom(currentRoomId);
-                alertUser(`Room '${roomName}' created successfully! Waiting for Player 2...`);
-            } catch (error) {
-                console.error("Error creating room:", error);
-                alertUser("Failed to create room. Check console for permission error.");
-            }
-        }
-
-        /**
-         * Joins an existing Pong room in Firestore.
-         */
-        async function joinRoom() {
-            if (!isAuthReady || currentRoomId) return;
-
-            const roomName = document.getElementById('room-name-input').value.trim();
-            if (!roomName) {
-                alertUser("Please enter a room name to join.");
-                return;
-            }
-
-            try {
-                const roomsRef = collection(db, getPublicCollectionPath('pong_rooms'));
-                // Query for rooms that are 'Waiting' and match the room name
-                const q = query(roomsRef, where("name", "==", roomName), where("status", "==", "Waiting"));
-                const querySnapshot = await getDocs(q);
-
-                if (querySnapshot.empty) {
-                    alertUser(`No waiting room found with name '${roomName}'.`);
-                    return;
-                }
-
-                // Take the first available room
-                const roomDoc = querySnapshot.docs[0];
-                const roomData = roomDoc.data();
-                
-                if (roomData.player1Id === userId) {
-                    alertUser("You are already Player 1 in this room.");
-                    currentRoomId = roomDoc.id;
-                    isPlayer1 = true;
-                    subscribeToRoom(currentRoomId);
-                    return;
-                }
-
-                // Join as Player 2
-                await updateDoc(roomDoc.ref, {
-                    player2Id: userId,
-                    status: 'Ready'
-                });
-
-                currentRoomId = roomDoc.id;
-                isPlayer2 = true;
-
-                subscribeToRoom(currentRoomId);
-                alertUser(`Joined room '${roomName}' as Player 2!`);
-
-            } catch (error) {
-                console.error("Error joining room:", error);
-                alertUser("Failed to join room. Check console for error.");
-            }
-        }
-
-        /**
-         * Subscribes to real-time updates for the current room document.
-         * @param {string} roomId 
-         */
-        function subscribeToRoom(roomId) {
-            if (unsubscribeRoom) {
-                unsubscribeRoom(); // Unsubscribe from any previous room
-            }
-
-            const roomRef = getRoomDocRef(roomId);
-
-            unsubscribeRoom = onSnapshot(roomRef, (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                    const roomData = docSnapshot.data();
-                    handleRoomUpdate(roomData);
-                } else {
-                    handleRoomDeletion();
-                }
-            }, (error) => {
-                console.error("Error subscribing to room:", error);
-                alertUser("Lost connection to the room.");
-            });
-
-            document.getElementById('create-room-btn').disabled = true;
-            document.getElementById('join-room-btn').disabled = true;
-            document.getElementById('leave-room-btn').disabled = false;
-        }
-
-        /**
-         * Processes real-time updates from the Firestore room document.
-         * @param {object} roomData 
-         */
-        function handleRoomUpdate(roomData) {
-            gameState.roomData = roomData;
-            document.getElementById('current-room-id').textContent = `Room: ${roomData.name}`;
-
-            if (roomData.player1Id === userId) {
-                isPlayer1 = true;
-                isPlayer2 = false;
-                document.getElementById('player-role').textContent = 'Role: Player 1 (Host)';
-            } else if (roomData.player2Id === userId) {
-                isPlayer1 = false;
-                isPlayer2 = true;
-                document.getElementById('player-role').textContent = 'Role: Player 2';
-            } else {
-                isPlayer1 = false;
-                isPlayer2 = false;
-                document.getElementById('player-role').textContent = 'Role: Spectator';
-            }
-
-            // Update local game state from remote
-            gameState.paddle1Y = roomData.paddle1Y;
-            gameState.paddle2Y = roomData.paddle2Y;
-            gameState.ballX = roomData.ballX;
-            gameState.ballY = roomData.ballY;
-            gameState.score1 = roomData.score1;
-            gameState.score2 = roomData.score2;
-            
-            // Check game status
-            if (roomData.status === 'Ready' && isPlayer1) {
-                // Player 1 (host) starts the game
-                isGameRunning = true;
-                statusEl.textContent = 'Game Starting! Move with UP/DOWN.';
-                statusEl.classList.remove('text-red-500');
-                statusEl.classList.add('text-yellow-500');
-            } else if (roomData.status === 'Ready' && isPlayer2) {
-                 isGameRunning = true;
-                 statusEl.textContent = 'Game Ready! Player 1 to start...';
-            } else if (roomData.status === 'Waiting') {
-                isGameRunning = false;
-                statusEl.textContent = 'Waiting for Player 2...';
-            } else if (roomData.status === 'Playing') {
-                isGameRunning = true;
-                statusEl.textContent = `Playing: ${roomData.score1} - ${roomData.score2}`;
-            } else if (roomData.status === 'GameOver') {
-                isGameRunning = false;
-                endGame(roomData.score1, roomData.score2);
-            }
-        }
-
-        /**
-         * Handles the case where the room document is deleted.
-         */
-        function handleRoomDeletion() {
-            alertUser('The room was deleted by the host.');
-            currentRoomId = null;
-            isPlayer1 = false;
-            isPlayer2 = false;
-            isGameRunning = false;
-            if (unsubscribeRoom) unsubscribeRoom();
-            document.getElementById('current-room-id').textContent = 'Room: N/A';
-            document.getElementById('player-role').textContent = 'Role: Spectator';
-            statusEl.textContent = "Ready. Use buttons to create or join a room.";
-            document.getElementById('create-room-btn').disabled = false;
-            document.getElementById('join-room-btn').disabled = false;
-            document.getElementById('leave-room-btn').disabled = true;
-        }
-
-        /**
-         * Updates a specific field in the current room document.
-         * @param {string} roomId 
-         * @param {object} data 
-         */
-        async function updateRoom(roomId, data) {
-            try {
-                await updateDoc(getRoomDocRef(roomId), data);
-            } catch (error) {
-                console.error("Error updating room data:", error);
-            }
-        }
-
-        /**
-         * Sends the local game state to Firestore. Only Player 1 (host) sends full state.
-         */
-        function sendGameUpdate() {
-            if (!currentRoomId || !isPlayer1 || !isGameRunning) return;
-
-            const updateData = {
-                paddle1Y: gameState.paddle1Y,
-                paddle2Y: gameState.paddle2Y,
-                ballX: gameState.ballX,
-                ballY: gameState.ballY,
-                score1: gameState.score1,
-                score2: gameState.score2,
-                status: 'Playing',
-            };
-            updateRoom(currentRoomId, updateData);
-        }
-
-        /**
-         * Sends only the local paddle position to Firestore.
-         */
-        function sendPaddleUpdate() {
-            if (!currentRoomId || !isGameRunning) return;
-
-            if (isPlayer1) {
-                updateRoom(currentRoomId, { paddle1Y: gameState.paddle1Y });
-            } else if (isPlayer2) {
-                updateRoom(currentRoomId, { paddle2Y: gameState.paddle2Y });
-            }
-        }
-        
-        /**
-         * Player leaves the room. Host deletes the room. Guest simply leaves.
-         */
-        async function leaveRoom() {
-            if (!currentRoomId) return;
-
-            if (isPlayer1) {
-                // Host deletes the room
-                try {
-                    await deleteDoc(getRoomDocRef(currentRoomId));
-                    alertUser(`Room '${gameState.roomData.name}' deleted.`);
-                } catch (error) {
-                    console.error("Error deleting room:", error);
-                    alertUser("Failed to delete room. Check console for permission error.");
-                }
-            } else if (isPlayer2) {
-                // Guest leaves, room status changes back to Waiting
-                try {
-                    await updateDoc(getRoomDocRef(currentRoomId), {
-                        player2Id: null,
-                        status: 'Waiting'
-                    });
-                    alertUser(`Left room '${gameState.roomData.name}'.`);
-                } catch (error) {
-                    console.error("Error leaving room:", error);
-                    alertUser("Failed to leave room.");
-                }
+                gameState.lastSyncTime = Date.now();
             }
             
-            handleRoomDeletion(); // Reset local state
+            // All users render the latest state
+            renderGame();
         }
 
-        /**
-         * Records a score to the leaderboard.
-         * @param {string} winnerId 
-         * @param {string} loserId // NEW: Added loserId
-         * @param {number} winnerScore 
-         * @param {number} loserScore 
-         */
+
+        // --- INPUT HANDLING ---
+        let keys = {};
+        document.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+        document.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+        function handleInput() {
+            // Only players can move
+            if (!isGameRunning || isSpectator) return;
+
+            const playerPaddleY = isPlayer1 ? 'paddle1Y' : 'paddle2Y';
+
+            let moved = false;
+            // Check for both Arrow Keys and W/S
+            if (keys['arrowup'] || keys['w']) {
+                gameState[playerPaddleY] -= PADDLE_SPEED * 2;
+                moved = true;
+            }
+            if (keys['arrowdown'] || keys['s']) {
+                gameState[playerPaddleY] += PADDLE_SPEED * 2;
+                moved = true;
+            }
+
+            if (moved) {
+                // Ensure paddle stays on screen before sending update
+                gameState[playerPaddleY] = Math.min(Math.max(0, gameState[playerPaddleY]), canvas.height - PADDLE_HEIGHT);
+                // P2 must send their paddle update immediately
+                if (isPlayer2) {
+                    sendPaddleUpdate();
+                }
+                // P1's paddle position is sent via the regular sendGameUpdate loop
+            }
+        }
+
+        // --- LEADERBOARD & SCORE RECORDING ---
         async function recordScore(winnerId, loserId, winnerScore, loserScore) {
-            if (!db || !isAuthReady) {
-                 console.warn("Skipping score record: DB not ready or Auth not complete.");
-                 return;
-            }
+            if (!db || !isAuthReady) return;
             try {
-                // The leaderboard is a public collection
-                await addDoc(collection(db, getPublicCollectionPath('leaderboard')), {
+                // Store in public collection for the leaderboard
+                await addDoc(collection(db, getPublicCollectionPath('pong_leaderboard')), {
                     winnerId: winnerId,
-                    loserId: loserId, // NEW: Store loser ID
+                    loserId: loserId,
                     winnerScore: winnerScore,
                     loserScore: loserScore,
                     timestamp: serverTimestamp(),
@@ -678,147 +695,93 @@
             }
         }
 
-        /**
-         * Fetches and listens to real-time leaderboard updates.
-         */
         function fetchLeaderboard() {
             if (!db || !isAuthReady || !userId) {
-                console.warn("Skipping leaderboard fetch: DB not ready, Auth not complete, or UserID missing.");
+                console.warn("Auth not ready, skipping leaderboard fetch.");
                 return;
             }
 
-            // Diagnostic log to confirm auth state before query
-            console.log(`[Firestore Debug] Attempting public collection read (leaderboard) as user ID: ${userId} (Ready)`);
+            const leaderboardRef = collection(db, getPublicCollectionPath('pong_leaderboard'));
+            // Query without orderBy to prevent needing an index for every field combination
+            const q = query(leaderboardRef); 
 
-            const leaderboardRef = collection(db, getPublicCollectionPath('leaderboard'));
-            // Query: Get all scores. The rules handle the authentication check.
-            // NOTE: orderBy() is avoided as per instructions to prevent index errors
-            const q = query(leaderboardRef);
-
-            if (unsubscribeLeaderboard) {
-                unsubscribeLeaderboard();
-            }
+            if (unsubscribeLeaderboard) unsubscribeLeaderboard();
 
             unsubscribeLeaderboard = onSnapshot(q, (snapshot) => {
-                // Process scores to aggregate wins and losses per user
                 const scoreMap = {};
 
-                // Aggregate wins and losses based on winnerId and loserId
                 snapshot.forEach(doc => {
                     const score = doc.data();
 
-                    // Aggregate winner
+                    // Aggregate wins/losses per user ID
                     scoreMap[score.winnerId] = scoreMap[score.winnerId] || { wins: 0, losses: 0, id: score.winnerId };
                     scoreMap[score.winnerId].wins++;
 
-                    // Aggregate loser (ensure loserId exists, as older scores might not have it)
                     if (score.loserId) {
                          scoreMap[score.loserId] = scoreMap[score.loserId] || { wins: 0, losses: 0, id: score.loserId };
                          scoreMap[score.loserId].losses++;
                     }
                 });
 
-                // Convert map to array and sort by wins (client-side sort to avoid index errors)
                 let leaderboardData = Object.values(scoreMap);
-                leaderboardData.sort((a, b) => b.wins - a.wins);
+                // Client-side sort to avoid Firestore index requirement
+                leaderboardData.sort((a, b) => {
+                    if (b.wins !== a.wins) {
+                        return b.wins - a.wins; // Sort primarily by wins
+                    }
+                    return a.losses - b.losses; // Then by fewest losses
+                });
 
-                // Render the leaderboard
                 const body = document.getElementById('leaderboard-body');
                 body.innerHTML = '';
                 if (leaderboardData.length === 0) {
-                    body.innerHTML = '<tr><td colspan="3" class="text-center">No scores recorded yet.</td></tr>';
+                    body.innerHTML = '<tr><td colspan="3" class="text-center text-retro opacity-50">No scores recorded yet.</td></tr>';
                     return;
                 }
 
                 leaderboardData.slice(0, 10).forEach((entry, index) => {
                     const row = body.insertRow();
-                    // Display truncated ID for table readability
-                    const displayedId = entry.id === userId ? `${entry.id.substring(0, 8)}... (You)` : `${entry.id.substring(0, 8)}...`;
+                    const isCurrentUser = entry.id === userId;
+                    const displayedId = entry.id.substring(0, 8);
                     
+                    row.className = isCurrentUser ? 'bg-green-700/30' : '';
+
                     row.innerHTML = `
-                        <td class="font-bold">${index + 1}.</td>
-                        <td>${displayedId}</td>
+                        <td class="font-bold text-lg">${index + 1}.</td>
+                        <td>${displayedId} ${isCurrentUser ? '(YOU)' : ''}</td>
                         <td>${entry.wins} - ${entry.losses}</td>
                     `;
                 });
             }, (error) => {
                 console.error("Error fetching leaderboard:", error);
+                // Display error message in the leaderboard area
+                document.getElementById('leaderboard-body').innerHTML = `
+                    <tr><td colspan="3" class="text-center text-red-500">Error fetching leaderboard: ${error.message}</td></tr>
+                `;
             });
+            console.log("Leaderboard listener attached.");
         }
 
-        // --- GAME LOOP ---
-        function gameLoop() {
-            requestAnimationFrame(gameLoop);
-            
-            if (isGameRunning) {
-                if (isPlayer1) {
-                    // Host calculates the physics
-                    updateLocalGame(); 
 
-                    // Host syncs state frequently to the database
-                    if (Date.now() - gameState.lastSyncTime > 100) { // Sync every 100ms
-                        sendGameUpdate();
-                        gameState.lastSyncTime = Date.now();
-                    }
-                }
-                
-                // Both players render the game state
-                renderGame();
-            } else {
-                renderGame(); // Still render to show scores/paddles even when stopped
-            }
-        }
+        // --- UI & INITIALIZATION ---
 
-        // --- INPUT HANDLING ---
-        let keys = {};
-        document.addEventListener('keydown', (e) => { keys[e.key] = true; });
-        document.addEventListener('keyup', (e) => { keys[e.key] = false; });
-
-        function handleInput() {
-            if (!isGameRunning) return;
-
-            const playerPaddleY = isPlayer1 ? 'paddle1Y' : 'paddle2Y';
-
-            // Check if up/down keys are pressed for the user's paddle
-            let moved = false;
-            if (keys['ArrowUp'] || keys['w']) {
-                gameState[playerPaddleY] -= PADDLE_SPEED * 2;
-                moved = true;
-            }
-            if (keys['ArrowDown'] || keys['s']) {
-                gameState[playerPaddleY] += PADDLE_SPEED * 2;
-                moved = true;
-            }
-
-            // Boundary check and update Firestore
-            if (moved) {
-                // Ensure paddle stays on screen
-                gameState[playerPaddleY] = Math.min(Math.max(0, gameState[playerPaddleY]), canvas.height - PADDLE_HEIGHT);
-                sendPaddleUpdate();
-            }
-        }
-
-        // --- UI FUNCTIONS ---
         function alertUser(message) {
-            // Using a simple status update instead of alert()
             statusEl.textContent = message;
             statusEl.classList.remove('text-red-500', 'text-yellow-500', 'text-green-500');
             statusEl.classList.add('text-yellow-500');
             console.log("User Alert:", message);
         }
 
-        // --- EVENT LISTENERS ---
-        document.getElementById('create-room-btn').addEventListener('click', createRoom);
-        document.getElementById('join-room-btn').addEventListener('click', joinRoom);
-        document.getElementById('leave-room-btn').addEventListener('click', leaveRoom);
+        document.getElementById('join-match-btn').addEventListener('click', claimPlayerSpot);
+        document.getElementById('leave-match-btn').addEventListener('click', relinquishPlayerSpot);
 
-        // Start the game loop and input loop
-        setInterval(handleInput, 1000 / 60); // Check input at 60 FPS
+        // Start the input loop and rendering loop
+        setInterval(handleInput, 1000 / 60); // Check input 60 times per second
+        
         window.onload = function() {
-            gameState.lastSyncTime = Date.now();
-            gameState.lastUpdateTime = Date.now();
-            renderGame(); // Initial render
+            renderGame();
             gameLoop();
+            authenticateAndSetup(); // Start the authentication process
         };
 
     </script>
