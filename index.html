@@ -1,0 +1,1623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro CRT Pong Multiplayer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Retro Font and Core Styling */
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+        
+        :root {
+            --neon-green: #39ff14; /* Player 1 / Left */
+            --neon-pink: #ff00ff;   /* Player 2 / Right / Bot */
+            --bg-dark: #111827;
+            --border-color: #2e3e50;
+        }
+        
+        body {
+            background-color: var(--bg-dark);
+            font-family: 'VT323', monospace;
+            color: var(--neon-green);
+            min-height: 100vh; /* Ensure full height on mobile */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1rem;
+            margin: 0;
+            overflow-x: hidden;
+        }
+
+        /* --- CRT EFFECT STYLING --- */
+
+        /* Main Game Container - The TV Bezel/Frame */
+        .game-container {
+            width: 98vw;
+            max-width: 900px;
+            aspect-ratio: 16 / 9;
+            /* Enhanced Bezel/Glow */
+            box-shadow: 0 0 20px rgba(57, 255, 20, 0.7); 
+            border: 4px solid var(--neon-green);
+            border-radius: 12px;
+            position: relative;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; 
+            background-color: #000;
+        }
+        
+        /* Inner screen wrapper for applying distortion */
+        .crt-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            /* Apply a slight screen curve filter */
+            border-radius: 8px;
+            overflow: hidden;
+            filter: brightness(1.1) contrast(1.2);
+            /* ADDED: Local Flicker to the screen itself */
+            animation: flicker 0.15s infinite alternate; 
+        }
+
+        #pongCanvas {
+            background-color: #000;
+            cursor: none;
+            touch-action: none;
+            display: block;
+            width: 100%;
+            height: 100%;
+            /* Apply barrel distortion and slight curve via transform */
+            transform: perspective(1000px) rotateX(0deg) rotateY(0deg); 
+        }
+
+        /* Scanline Overlay */
+        .crt-screen::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            /* Simplified and ensured high contrast scanlines */
+            background: linear-gradient(rgba(18, 16, 16, 0.3) 50%, rgba(0, 0, 0, 0.3) 50%);
+            z-index: 100;
+            background-size: 100% 4px; /* Only horizontal scanlines */
+            pointer-events: none;
+            opacity: 0.6; 
+        }
+
+
+        /* Keyframes for CRT Effects */
+        @keyframes flicker {
+            0% { opacity: 1; }
+            5% { opacity: 0.98; }
+            10% { opacity: 1; }
+            25% { opacity: 0.96; }
+            30% { opacity: 1; }
+            100% { opacity: 1; }
+        }
+
+        @keyframes pulse {
+            from { opacity: 1; }
+            to { opacity: 0.8; }
+        }
+        
+        /* --- END CRT EFFECT STYLING --- */
+        
+        
+        /* Score and UI Elements */
+        .score-board {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-around;
+            padding: 5px 0;
+            font-size: clamp(1.5rem, 5vw, 2.5rem);
+            z-index: 10;
+        }
+
+        /* Stronger Neon Glow */
+        .score-p1 {
+            text-shadow: 0 0 5px var(--neon-green), 0 0 10px rgba(57, 255, 20, 0.5); 
+        }
+
+        .score-p2 {
+            color: var(--neon-pink);
+            text-shadow: 0 0 5px var(--neon-pink), 0 0 10px rgba(255, 0, 255, 0.5);
+        }
+
+        #startMessage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: clamp(1.5rem, 6vw, 3rem);
+            text-shadow: 0 0 8px var(--neon-green), 0 0 15px rgba(57, 255, 20, 0.5); 
+            animation: pulse 1.5s infinite alternate;
+            cursor: pointer;
+            z-index: 20;
+            text-align: center;
+            padding: 10px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 8px;
+        }
+        
+        /* Panel Styling */
+        .panel {
+            background-color: #222;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            width: 100%;
+            max-width: 900px;
+            margin-top: 1rem;
+            box-shadow: 0 0 10px rgba(57, 255, 20, 0.3);
+        }
+        
+        /* Auth Status/Info Bar */
+        .info-bar {
+            background-color: #0d1217;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: #ccc;
+            width: 98vw;
+            max-width: 900px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        @media (min-width: 640px) {
+            .info-bar {
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+            }
+        }
+        
+        #time-display {
+            color: var(--neon-pink);
+            text-shadow: 0 0 2px var(--neon-pink);
+            font-weight: bold;
+        }
+        
+        .auth-link {
+            cursor: pointer;
+            text-decoration: underline;
+            color: var(--neon-pink);
+            transition: color 0.1s;
+        }
+
+        .auth-link:hover {
+            color: #ff4dff;
+        }
+
+        /* Modal styling */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 200;
+        }
+        .modal-content {
+            background: var(--bg-dark);
+            border: 3px solid var(--neon-pink);
+            box-shadow: 0 0 15px var(--neon-pink);
+            padding: 2rem;
+            border-radius: 10px;
+            text-align: center;
+            color: var(--neon-pink);
+            max-width: 90%;
+            min-width: 300px;
+            font-size: 1.2rem;
+        }
+        .modal-content button {
+            background: var(--neon-pink);
+            color: var(--bg-dark);
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: background 0.3s, box-shadow 0.3s;
+            border: none;
+            cursor: pointer;
+            text-shadow: none;
+            font-size: 1rem;
+        }
+        .modal-content button:hover {
+            background: #ff4dff;
+            box-shadow: 0 0 10px #ff4dff;
+        }
+        .auth-input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            background-color: #000;
+            border: 1px solid var(--neon-green);
+            color: var(--neon-green);
+            border-radius: 4px;
+            font-family: 'VT323', monospace;
+            font-size: 1rem;
+        }
+        
+        /* Leaderboard Styling */
+        #leaderboard-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            color: #ddd;
+        }
+        .leaderboard-header {
+            color: var(--neon-green);
+            text-shadow: 0 0 2px var(--neon-green);
+            border-bottom: 2px solid var(--neon-green);
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Information Bar -->
+    <div class="info-bar flex flex-col sm:flex-row justify-between items-center w-full max-w-[900px] mb-4">
+        <div id="auth-time-group" class="flex flex-col sm:flex-row sm:items-center gap-4 w-full justify-between sm:w-auto">
+            <div id="auth-status" class="flex items-center gap-2 text-sm">
+                <div id="auth-status-display">
+                    <span id="authStatusText">Status: Connecting...</span>
+                    <span id="authUserId" class="text-xs text-gray-400"></span>
+                </div>
+                <!-- Dynamic Sign In / Sign Out Link -->
+                <span id="authActionLink" class="auth-link text-xs">Sign In / Sign Up</span>
+            </div>
+            <!-- Time Display -->
+            <div id="time-display" class="text-xs">
+                Time: 00:00:00
+            </div>
+        </div>
+        <div id="role-display" class="text-xs text-center hidden sm:block">
+            Role: <span id="player-role" class="font-bold"></span>
+        </div>
+    </div>
+
+
+    <div class="flex flex-col md:flex-row max-w-[900px] w-full gap-4">
+        <!-- Multiplayer Connection Panel -->
+        <div class="panel flex-1 md:w-1/2">
+            <h2 class="text-xl font-bold mb-4 text-center text-white" style="text-shadow: 0 0 5px var(--neon-green);">
+                GAME MODE SELECT
+            </h2>
+            
+            <div id="game-mode-controls" class="space-y-4">
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <!-- NEW BOT BUTTON -->
+                    <button id="playBotButton" class="flex-1 text-gray-900 p-3 rounded-lg font-bold" style="background:#4dff88; transition: opacity 0.3s;">
+                        PLAY AGAINST BOT
+                    </button>
+                </div>
+                
+                <div class="text-center text-gray-500 text-sm">
+                    — OR —
+                </div>
+
+                <!-- PVP Controls -->
+                <div id="pvp-controls-section" class="space-y-4">
+                    <h3 class="text-lg text-center font-bold text-white mb-2">PVP MULTIPLAYER</h3>
+                    <!-- Create Room -->
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <button id="createRoomButton" class="flex-1 hover:bg-green-400 text-gray-900 p-2 rounded-lg" style="background:var(--neon-green)">
+                            CREATE ROOM
+                        </button>
+                    </div>
+
+                    <!-- Join Room -->
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="text" id="roomIdInput" class="auth-input flex-1 mb-0" placeholder="Enter Room ID to Join" />
+                        <button id="joinRoomButton" class="bg-blue-500 hover:bg-blue-400 text-gray-900 flex-1 p-2 rounded-lg">
+                            JOIN ROOM
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Room Status/Controls -->
+            <div id="room-status-group" class="mt-4">
+                <div id="room-status" class="text-center mb-4 text-white text-lg">Not in a room.</div>
+                
+                <div id="game-controls" class="hidden mt-4 text-center">
+                    <p class="text-sm text-gray-400 mb-2">Room ID: <span id="display-room-id" class="text-white"></span></p>
+                    <button id="leaveRoomButton" class="bg-red-500 hover:bg-red-400 text-white p-2 rounded-lg">
+                        LEAVE ROOM
+                    </button>
+                </div>
+            </div>
+
+        </div>
+        
+        <!-- Leaderboard Panel -->
+        <div class="panel flex-1 md:w-1/2 mt-4 md:mt-0">
+            <h2 class="text-xl font-bold mb-4 text-center text-white" style="color:var(--neon-pink); text-shadow: 0 0 5px var(--neon-pink);">
+                TOP 10 WINNERS
+            </h2>
+            <div class="flex justify-between leaderboard-header text-sm">
+                <span class="w-8 text-left">#</span>
+                <span class="flex-1 text-left">PLAYER</span>
+                <span class="w-16 text-right">SCORE</span>
+            </div>
+            <ul id="leaderboard-list">
+                <!-- Leaderboard items will be injected here -->
+                <p class="text-center text-gray-500 mt-4">Loading scores...</p>
+            </ul>
+        </div>
+    </div>
+
+
+    <div class="game-container w-full max-w-[900px] mt-4">
+        <div class="crt-screen">
+            <!-- Score Board -->
+            <div class="score-board">
+                <span class="score-p1" id="player1Score">0</span>
+                <span class="score-p2" id="player2Score">0</span>
+            </div>
+
+            <!-- Canvas for the game -->
+            <canvas id="pongCanvas"></canvas>
+
+            <!-- Start Message (Dynamic) -->
+            <div id="startMessage">
+                CHOOSE GAME MODE
+            </div>
+        </div>
+    </div>
+
+    <!-- User ID Display -->
+    <p class="mt-4 text-xs text-center opacity-70">
+        Current User ID: <span id="display-user-id" class="font-mono text-xs">Waiting for connection...</span>
+    </p>
+
+
+    <!-- Custom Modal for Game Over -->
+    <div id="gameOverModal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 id="modalText"></h2>
+            <p id="submissionStatus" class="mb-4 text-sm"></p>
+            <button id="restartButton">PLAY AGAIN</button>
+        </div>
+    </div>
+    
+    <!-- Custom Modal for Email/Password Auth -->
+    <div id="authModal" class="modal-overlay hidden">
+        <div class="modal-content text-left">
+            <h2 class="text-2xl font-bold mb-4 text-center">PLAYER AUTHENTICATION</h2>
+            
+            <!-- Google Sign-In Button -->
+            <button id="googleSignInButton" class="w-full mb-4 flex items-center justify-center p-3 rounded-lg text-black bg-white hover:bg-gray-200">
+                <svg class="w-5 h-5 mr-2" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M44.5 20H42V24H44.5C45.2 24 45.8 23.4 45.8 22.7V21.3C45.8 20.6 45.2 20 44.5 20Z" fill="#FBCD00"/>
+                    <path d="M24 8.5C28.8 8.5 33.1 10.3 36.3 13.5L32.1 17.7C30.2 15.8 27.2 14.5 24 14.5C18.6 14.5 13.9 18.2 12.2 23.2L7.8 19.9C10.6 13.4 16.7 8.5 24 8.5Z" fill="#EA4335"/>
+                    <path d="M44.5 20H42V24H44.5C45.2 24 45.8 23.4 45.8 22.7V21.3C45.8 20.6 45.2 20 44.5 20Z" fill="#FBCD00"/>
+                    <path d="M24 43.5C31.5 43.5 37.8 39 40.5 33.1L36.1 29.8C34 34.5 29.3 37.5 24 37.5C18.6 37.5 13.9 33.8 12.2 28.8L7.8 32.1C10.6 38.6 16.7 43.5 24 43.5Z" fill="#34A853"/>
+                    <path d="M24 20H44.5C45.2 20 45.8 20.6 45.8 21.3V22.7C45.8 23.4 45.2 24 44.5 24H24V20Z" fill="#4285F4"/>
+                    <path d="M7.8 19.9L3.5 23.2C2.7 21.8 2.2 20.5 2.2 19V17C2.2 15.5 2.7 14.2 3.5 12.8L7.8 16.1L7.8 19.9Z" fill="#FBCD00"/>
+                    <path d="M24 20H44.5C45.2 20 45.8 20.6 45.8 21.3V22.7C45.8 23.4 45.2 24 44.5 24H24V20Z" fill="#4285F4"/>
+                    <path d="M7.8 32.1L3.5 28.8C2.7 30.2 2.2 31.5 2.2 33V35C2.2 36.5 2.7 37.8 3.5 39.2L7.8 35.9L7.8 32.1Z" fill="#FBCD00"/>
+                </svg>
+                Sign in with Google
+            </button>
+            
+            <div class="text-center mb-4 text-xs text-gray-500">
+                — OR —
+            </div>
+
+            <p class="text-sm text-center mb-4 text-gray-400">Sign up or Log in with Email & Password:</p>
+            
+            <input type="email" id="authEmail" class="auth-input" placeholder="Email Address" required>
+            <input type="password" id="authPassword" class="auth-input" placeholder="Password (min 6 chars)" required>
+
+            <div class="flex justify-between gap-4 mt-4">
+                <button id="signUpButton" class="flex-1 p-3 rounded-lg text-gray-900" style="background:var(--neon-green)">SIGN UP</button>
+                <button id="signInButton" class="flex-1 p-3 rounded-lg">LOG IN</button>
+            </div>
+            
+            <p id="authMessage" class="mt-4 text-sm text-center"></p>
+
+            <div class="text-center mt-6">
+                 <!-- ANONYMOUS SIGN-IN BUTTON -->
+                 <button id="anonymousSignInButton" class="text-xs text-gray-400 p-2 rounded-lg hover:text-white border border-gray-600 w-full">
+                    CONTINUE ANONYMOUSLY (No account required)
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Firebase SDKs and Game Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+            createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
+            GoogleAuthProvider, signInWithPopup 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, 
+            serverTimestamp, updateDoc, addDoc, setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Enable Firebase debug logging for better issue tracking
+        setLogLevel('debug');
+
+
+        // --- Firebase Setup and Configuration ---
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        let app;
+        let db;
+        let auth;
+        let userId = null;
+        let userName = 'Anon';
+        let isAuthReady = false;
+        
+        // --- Room State Variables ---
+        let gameMode = 'none'; // 'pvp', 'bot'
+        let currentRoomId = null;
+        let currentPlayerRole = null; // 'P1' or 'P2'
+        let unsubscribeRoom = null; // Listener cleanup function
+
+        // --- DOM Elements ---
+        const authStatusTextEl = document.getElementById('authStatusText');
+        const authUserIdEl = document.getElementById('authUserId'); 
+        const displayUserIdEl = document.getElementById('display-user-id'); 
+        const authActionLink = document.getElementById('authActionLink'); 
+        const authModal = document.getElementById('authModal');
+        const authEmail = document.getElementById('authEmail');
+        const authPassword = document.getElementById('authPassword');
+        const signUpButton = document.getElementById('signUpButton');
+        const signInButton = document.getElementById('signInButton');
+        const googleSignInButton = document.getElementById('googleSignInButton'); 
+        const anonymousSignInButton = document.getElementById('anonymousSignInButton'); 
+        const authMessage = document.getElementById('authMessage');
+
+        const canvas = document.getElementById('pongCanvas');
+        const ctx = canvas.getContext('2d');
+        const player1ScoreEl = document.getElementById('player1Score');
+        const player2ScoreEl = document.getElementById('player2Score');
+        const startMessage = document.getElementById('startMessage');
+        const gameOverModal = document.getElementById('gameOverModal');
+        const restartButton = document.getElementById('restartButton');
+        const modalText = document.getElementById('modalText');
+        
+        const roomStatusGroupEl = document.getElementById('room-status-group');
+        const roomStatusEl = document.getElementById('room-status');
+        const gameControlsEl = document.getElementById('game-controls');
+        const roomIdInput = document.getElementById('roomIdInput');
+        const createRoomButton = document.getElementById('createRoomButton');
+        const joinRoomButton = document.getElementById('joinRoomButton');
+        const leaveRoomButton = document.getElementById('leaveRoomButton');
+        const displayRoomIdEl = document.getElementById('display-room-id');
+        const roleDisplayEl = document.getElementById('role-display');
+        const playerRoleEl = document.getElementById('player-role');
+        
+        // NEW MODE CONTROLS
+        const pvpControlsSection = document.getElementById('pvp-controls-section');
+        const playBotButton = document.getElementById('playBotButton');
+
+        // LEADERBOARD/TIME
+        const timeDisplayEl = document.getElementById('time-display');
+        const leaderboardListEl = document.getElementById('leaderboard-list');
+
+
+        // --- Game Configuration (Multiplayer simplified) ---
+        const config = {
+            paddleWidthRatio: 0.015,
+            paddleHeightRatio: 0.15,
+            ballSizeRatio: 0.015,
+            initialSpeed: 5,
+            maxSpeed: 10,
+            scoreToWin: 5,
+            neonGreen: '#39ff14', // P1
+            neonPink: '#ff00ff',   // P2
+            gameRunning: false,
+            ballUpdateRateMs: 50, 
+        };
+
+        let paddleWidth, paddleHeight, ballSize, speedIncrement;
+        let animationFrameId;
+        const keysPressed = {}; 
+        
+        // Local Game State
+        let player1 = { x: 0, y: 0, score: 0, color: config.neonGreen, name: 'P1' };
+        let player2 = { x: 0, y: 0, score: 0, color: config.neonPink, name: 'P2' };
+        let ball = { x: 0, y: 0, dx: 0, dy: 0, speed: 0, color: config.neonGreen };
+        
+        // Bot specific speed/difficulty
+        const botSpeed = 0.025; // Ratio of canvas height per frame
+        const botInaccuracy = 0.7; // How close to the center of the paddle the bot tries to hit (1.0 = perfect)
+
+
+        // --- Utility Functions ---
+
+        function generateRoomId() {
+            return Math.random().toString(36).substring(2, 6).toUpperCase();
+        }
+        
+        const getRoomDocRef = (id) => {
+            if (!db) return null;
+            // Public collection path: /artifacts/{appId}/public/data/{collection_name}
+            const collectionPath = `artifacts/${appId}/public/data/pong_rooms`; 
+            return doc(db, collectionPath, id);
+        };
+        
+        const getLeaderboardCollection = () => {
+             if (!db) return null;
+             // Public collection path: /artifacts/{appId}/public/data/{collection_name}
+             return collection(db, `artifacts/${appId}/public/data/leaderboard`);
+        }
+        
+        const getDisplayName = (user) => {
+            return user?.displayName || user?.email || `Anon-${user?.uid.substring(user.uid.length - 4)}` || 'Anon';
+        };
+        
+        function updateClock() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            timeDisplayEl.textContent = `Time: ${timeString}`;
+        }
+
+        // --- Firebase Auth & UI Handlers ---
+
+        function handleAuthError(error) {
+            let message = "An unknown error occurred.";
+            if (error.code) {
+                switch (error.code) {
+                    case 'auth/weak-password': message = 'Weak password. It must be at least 6 characters.'; break;
+                    case 'auth/email-already-in-use': message = 'Email already registered. Try logging in.'; break;
+                    case 'auth/invalid-credential':
+                    case 'auth/user-not-found':
+                    case 'auth/wrong-password': message = 'Invalid email or password.'; break;
+                    case 'auth/invalid-email': message = 'Invalid email format.'; break;
+                    case 'auth/popup-closed-by-user': message = 'Sign-in cancelled by user.'; break;
+                    case 'permission-denied': message = 'Permissions error: Security rules blocked access.'; break; // Added specific Firestore check
+                    default: message = `Error: ${error.message}`;
+                }
+            }
+            authMessage.textContent = message;
+            authMessage.style.color = '#ff4dff'; 
+            console.error("Auth Error:", error.code, error.message);
+        }
+        
+        async function handleEmailAuth(isSignUp) {
+            const email = authEmail.value;
+            const password = authPassword.value;
+            authMessage.textContent = isSignUp ? "Creating account..." : "Logging in...";
+            authMessage.style.color = config.neonGreen;
+
+            try {
+                if (isSignUp) {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                }
+                authMessage.textContent = isSignUp ? "Sign up successful! Logged in." : "Login successful!";
+            } catch (error) {
+                handleAuthError(error);
+            }
+        }
+
+        async function handleSignOut() {
+            if (currentRoomId && gameMode === 'pvp') await leaveRoom();
+            else if (gameMode === 'bot') stopBotGame();
+            
+            try {
+                // Ensure we sign out and let the listener handle the rest
+                await signOut(auth);
+            } catch (error) {
+                console.error("Error signing out:", error);
+            }
+        }
+
+        async function handleGoogleSignIn() {
+            authMessage.textContent = "Connecting with Google...";
+            authMessage.style.color = config.neonGreen;
+            try {
+                const provider = new GoogleAuthProvider();
+                await signInWithPopup(auth, provider);
+                authMessage.textContent = "Google sign-in successful! Logged in.";
+            } catch (error) {
+                handleAuthError(error);
+            }
+        }
+        
+        async function handleAnonymousSignIn() {
+             authMessage.textContent = "Signing in anonymously...";
+             authMessage.style.color = config.neonGreen;
+             try {
+                // Sign out any existing user before signing in anonymously if they are not already anonymous
+                if (auth.currentUser && !auth.currentUser.isAnonymous) {
+                    await signOut(auth); 
+                }
+                await signInAnonymously(auth);
+                authModal.classList.add('hidden');
+             } catch (error) {
+                handleAuthError(error);
+             }
+        }
+
+
+        function handleAuthStateChange(user) {
+            
+            if (user) {
+                // User is authenticated (anonymous or permanent)
+                userId = user.uid;
+                // Only set userName if it's not the initial 'Anon' state unless they provided a name/email
+                userName = getDisplayName(user); 
+                displayUserIdEl.textContent = user.uid;
+                
+                if (user.isAnonymous) {
+                    authStatusTextEl.textContent = 'Status: Anonymous';
+                    authUserIdEl.innerHTML = `<span class="text-gray-400"> (UID: ${user.uid.substring(user.uid.length - 8)}) </span>`;
+                } else {
+                    authStatusTextEl.textContent = 'Status: Signed In';
+                    const identifier = user.email || user.displayName || user.uid.substring(user.uid.length - 8);
+                    authUserIdEl.innerHTML = `<span class="text-white"> (${identifier}) </span>`;
+                }
+
+                // If any user is logged in, the action link should be Sign Out
+                authActionLink.textContent = 'Sign Out';
+                authActionLink.onclick = handleSignOut; 
+                
+                // This is the signal that we are ready to query Firestore
+                if (!isAuthReady) {
+                    isAuthReady = true;
+                    // Re-run the leaderboard setup once we have a valid user ID
+                    setupLeaderboardListener();
+                }
+
+                authModal.classList.add('hidden');
+                console.log("Auth state changed: User is signed in. ID:", user.uid);
+
+            } else {
+                // User is signed out or not authenticated
+                userId = null;
+                userName = 'Anon';
+                isAuthReady = false;
+                
+                authStatusTextEl.textContent = 'Status: Sign In Required';
+                authUserIdEl.textContent = '';
+                displayUserIdEl.textContent = 'Not authenticated';
+                
+                // If user is logged out, the action link shows Sign In / Sign Up
+                authActionLink.textContent = 'Sign In / Sign Up';
+                authActionLink.onclick = () => {
+                    authMessage.textContent = '';
+                    authModal.classList.remove('hidden');
+                };
+                
+                // If we sign out, we can't listen to the leaderboard anymore
+                if (unsubscribeLeaderboard) {
+                    unsubscribeLeaderboard();
+                    leaderboardListEl.innerHTML = '<p class="text-center text-gray-500 mt-4">Sign in to view and post scores.</p>';
+                }
+                
+                console.log("Auth state changed: User is signed out.");
+            }
+        }
+        
+        // --- Leaderboard Logic ---
+        
+        async function submitScore(p1Name, p2Name, score1, score2) {
+            if (!db || !isAuthReady) return;
+            // Only submit if a winner is clearly defined
+            if (Math.max(score1, score2) < config.scoreToWin) return; 
+
+            const leaderboardCollection = getLeaderboardCollection();
+            
+            const winnerName = score1 > score2 ? p1Name : p2Name;
+            const winnerScore = Math.max(score1, score2);
+            const loserScore = Math.min(score1, score2);
+            const loserName = score1 > score2 ? p2Name : p1Name;
+
+            try {
+                await addDoc(leaderboardCollection, {
+                    winner: winnerName,
+                    loser: loserName,
+                    winnerScore: winnerScore,
+                    loserScore: loserScore,
+                    timestamp: serverTimestamp(),
+                });
+                console.log("Score submitted to leaderboard.");
+            } catch (error) {
+                console.error("Error submitting score (Check Security Rules!):", error);
+                const submissionStatus = document.getElementById('submissionStatus');
+                submissionStatus.textContent = `Score submission failed: ${error.message}. Check the security rules.`;
+                submissionStatus.style.color = '#ff4dff';
+            }
+        }
+        
+        let unsubscribeLeaderboard = null;
+        
+        function setupLeaderboardListener() {
+            if (unsubscribeLeaderboard) {
+                unsubscribeLeaderboard();
+                unsubscribeLeaderboard = null;
+            }
+            if (!db || !isAuthReady) {
+                leaderboardListEl.innerHTML = '<p class="text-center text-gray-500 mt-4">Waiting for authentication...</p>';
+                return;
+            }
+
+            const leaderboardCollection = getLeaderboardCollection();
+
+            // Using onSnapshot with the collection reference
+            unsubscribeLeaderboard = onSnapshot(leaderboardCollection, (snapshot) => {
+                const scores = [];
+                snapshot.forEach(doc => {
+                    scores.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Sort locally by winnerScore (descending)
+                scores.sort((a, b) => {
+                    if (b.winnerScore !== a.winnerScore) {
+                        return b.winnerScore - a.winnerScore;
+                    }
+                    // Secondary sort by timestamp (newest first), handling pending timestamps
+                    const timeA = a.timestamp?.toMillis ? a.timestamp.toMillis() : 0;
+                    const timeB = b.timestamp?.toMillis ? b.timestamp.toMillis() : 0;
+                    return timeB - timeA;
+                });
+
+                renderLeaderboard(scores.slice(0, 10)); // Show top 10
+            }, (error) => {
+                console.error("Leaderboard listener error (Check Security Rules!):", error);
+                leaderboardListEl.innerHTML = '<p class="text-center text-red-500 mt-4">Failed to load leaderboard. (Permission Denied)</p>';
+            });
+        }
+        
+        function renderLeaderboard(scores) {
+            leaderboardListEl.innerHTML = '';
+
+            if (scores.length === 0) {
+                leaderboardListEl.innerHTML = '<p class="text-center text-gray-500 mt-4">No scores recorded yet.</p>';
+                return;
+            }
+
+            scores.forEach((score, index) => {
+                const rank = index + 1;
+                const item = document.createElement('li');
+                item.className = 'flex justify-between items-center p-2 border-b border-gray-700 last:border-b-0 text-sm';
+                
+                let rankClass = 'text-gray-400';
+                if (rank === 1) rankClass = 'text-yellow-400 font-extrabold';
+                else if (rank === 2) rankClass = 'text-gray-300 font-bold';
+                else if (rank === 3) rankClass = 'text-orange-400 font-bold';
+                
+                // Use a default color for the winner
+                const winnerColor = score.winner.includes('Bot') ? config.neonPink : config.neonGreen;
+
+                item.innerHTML = `
+                    <span class="${rankClass} w-8 text-left">${rank}.</span>
+                    <span class="flex-1 text-left" style="color:${winnerColor}; text-shadow: 0 0 2px ${winnerColor};">${score.winner}</span>
+                    <span class="w-16 text-right font-bold">${score.winnerScore}-${score.loserScore}</span>
+                `;
+                leaderboardListEl.appendChild(item);
+            });
+        }
+        
+        // --- Game Mode Handlers ---
+        
+        function updateRoomUI() {
+            const inRoom = currentRoomId !== null;
+            
+            // Show/Hide game controls (Leave Room)
+            gameControlsEl.classList.toggle('hidden', !inRoom);
+            
+            // Show/Hide mode selection (PVP and Bot buttons)
+            pvpControlsSection.classList.toggle('hidden', inRoom);
+            playBotButton.classList.toggle('hidden', inRoom);
+            
+            // Show/Hide status group
+            roomStatusGroupEl.classList.remove('hidden');
+        }
+
+        // ------------------------------------
+        // --- BOT GAME MODE LOGIC ---
+        // ------------------------------------
+        
+        function startBotGameMode() {
+            if (!isAuthReady) {
+                roomStatusEl.textContent = "Please sign in or continue anonymously first.";
+                authModal.classList.remove('hidden');
+                return;
+            }
+            if (currentRoomId) return; 
+
+            gameMode = 'bot';
+            currentRoomId = 'BOT'; 
+            currentPlayerRole = 'P1';
+            
+            player1.name = userName;
+            player2.name = 'PongBot';
+
+            roomStatusEl.textContent = `Playing locally against ${player2.name}.`;
+            playerRoleEl.textContent = `P1 (${player1.name})`;
+            roleDisplayEl.classList.remove('hidden');
+            
+            resetGameAndUI();
+
+            // Set the start message for bot mode
+            startMessage.textContent = "CLICK TO START";
+            updateRoomUI();
+        }
+
+        function stopBotGame() {
+            gameMode = 'none';
+            currentRoomId = null;
+            currentPlayerRole = null;
+            
+            resetGameAndUI(); // Clean up state
+            
+            startMessage.textContent = "CHOOSE GAME MODE";
+            updateRoomUI();
+            
+            player1.name = 'P1';
+            player2.name = 'P2';
+            playerRoleEl.textContent = '';
+            roleDisplayEl.classList.add('hidden');
+        }
+
+
+        // ------------------------------------
+        // --- PVP MODE LOGIC (EXISTING) ---
+        // ------------------------------------
+        
+        async function createRoom() {
+            if (!isAuthReady) {
+                roomStatusEl.textContent = "Please sign in first.";
+                authModal.classList.remove('hidden');
+                return;
+            }
+            if (currentRoomId) {
+                roomStatusEl.textContent = "Already in a room!";
+                return;
+            }
+            
+            const newRoomId = generateRoomId();
+            const roomRef = getRoomDocRef(newRoomId);
+            
+            try {
+                await setDoc(roomRef, {
+                    player1Id: userId,
+                    player1Name: userName,
+                    player2Id: null,
+                    player2Name: null,
+                    status: 'waiting',
+                    score1: 0,
+                    score2: 0,
+                    p1Y: (canvas.height - paddleHeight) / 2,
+                    p2Y: (canvas.height - paddleHeight) / 2,
+                    ballX: canvas.width / 2,
+                    ballY: canvas.height / 2,
+                    ballDX: 0,
+                    ballDY: 0,
+                    timestamp: serverTimestamp(),
+                    createdAt: serverTimestamp()
+                });
+
+                currentRoomId = newRoomId;
+                gameMode = 'pvp';
+                currentPlayerRole = 'P1';
+                setupRoomListener(newRoomId);
+                roomStatusEl.textContent = `Room created! ID: ${newRoomId}`;
+                displayRoomIdEl.textContent = newRoomId;
+                playerRoleEl.textContent = `P1 (${userName})`;
+                roleDisplayEl.classList.remove('hidden');
+                updateRoomUI();
+                resetGameAndUI(); // Reset local state after mode selection
+            } catch (error) {
+                console.error("Error creating room (Check Security Rules!):", error);
+                roomStatusEl.textContent = `Error creating room: Missing or insufficient permissions.`;
+            }
+        }
+
+        async function joinRoom() {
+            if (!isAuthReady) {
+                roomStatusEl.textContent = "Please sign in first.";
+                authModal.classList.remove('hidden');
+                return;
+            }
+            if (currentRoomId) {
+                roomStatusEl.textContent = "Already in a room!";
+                return;
+            }
+
+            const joinId = roomIdInput.value.trim().toUpperCase();
+            if (!joinId) {
+                roomStatusEl.textContent = "Enter a valid Room ID.";
+                return;
+            }
+
+            const roomRef = getRoomDocRef(joinId);
+            roomStatusEl.textContent = "Checking room...";
+
+            try {
+                const docSnap = await getDoc(roomRef);
+                if (!docSnap.exists()) {
+                    roomStatusEl.textContent = `Room ID ${joinId} not found.`;
+                    return;
+                }
+
+                const roomData = docSnap.data();
+                if (roomData.player1Id === userId) {
+                     currentPlayerRole = 'P1';
+                } else if (roomData.player2Id) {
+                    roomStatusEl.textContent = `Room is full.`;
+                    return;
+                } else {
+                    await updateDoc(roomRef, {
+                        player2Id: userId,
+                        player2Name: userName,
+                        status: 'ready',
+                        p2Y: (canvas.height - paddleHeight) / 2 
+                    });
+                    currentPlayerRole = 'P2';
+                }
+
+                currentRoomId = joinId;
+                gameMode = 'pvp';
+                setupRoomListener(joinId);
+                roomStatusEl.textContent = `Joined Room ${joinId} as Player ${currentPlayerRole}.`;
+                displayRoomIdEl.textContent = joinId;
+                playerRoleEl.textContent = `P2 (${userName})`;
+                roleDisplayEl.classList.remove('hidden');
+                updateRoomUI();
+                resetGameAndUI(); // Reset local state after mode selection
+
+            } catch (error) {
+                console.error("Error joining room (Check Security Rules!):", error);
+                roomStatusEl.textContent = `Error joining room: Missing or insufficient permissions.`;
+            }
+        }
+
+        async function leaveRoom() {
+            if (!currentRoomId || gameMode !== 'pvp') return;
+            
+            if (unsubscribeRoom) {
+                unsubscribeRoom();
+                unsubscribeRoom = null;
+            }
+            
+            const roomRef = getRoomDocRef(currentRoomId);
+            
+            try {
+                if (currentPlayerRole === 'P1') {
+                    // P1 leaving invalidates the room
+                    await updateDoc(roomRef, { 
+                        player1Id: null, 
+                        status: 'finished', // This will disconnect P2 too
+                        player1Name: null 
+                    }); 
+                } else if (currentPlayerRole === 'P2') {
+                    // P2 leaving opens the room up for another player
+                    await updateDoc(roomRef, { 
+                        player2Id: null, 
+                        status: 'waiting', 
+                        player2Name: null 
+                    });
+                }
+            } catch (error) {
+                console.error("Error leaving room:", error);
+            } finally {
+                currentRoomId = null;
+                gameMode = 'none';
+                currentPlayerRole = null;
+                updateRoomUI();
+                
+                resetGameAndUI(); // Clean up state
+                startMessage.textContent = "CHOOSE GAME MODE";
+                
+                player1.name = 'P1';
+                player2.name = 'P2';
+                playerRoleEl.textContent = '';
+                roleDisplayEl.classList.add('hidden');
+            }
+        }
+        
+        function setupRoomListener(roomId) {
+            if (unsubscribeRoom) unsubscribeRoom();
+
+            const roomRef = getRoomDocRef(roomId);
+
+            unsubscribeRoom = onSnapshot(roomRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    roomStatusEl.textContent = `Room ${roomId} was deleted.`;
+                    leaveRoom(); 
+                    return;
+                }
+
+                const room = docSnap.data();
+                handleRoomUpdate(room);
+            }, (error) => {
+                console.error("Firestore Listener Error:", error);
+                roomStatusEl.textContent = `Connection error: Check Security Rules.`;
+                leaveRoom();
+            });
+        }
+        
+        function handleRoomUpdate(room) {
+            
+            if (!room || gameMode !== 'pvp') return;
+            
+            // 1. Check for KICK/FORCED LEAVE
+            const isPlayerInRoom = (currentPlayerRole === 'P1' && room.player1Id === userId) || 
+                                   (currentPlayerRole === 'P2' && room.player2Id === userId);
+            
+            if (!isPlayerInRoom && currentRoomId) {
+                roomStatusEl.textContent = `You were removed from room ${currentRoomId}.`;
+                leaveRoom();
+                return;
+            }
+
+            // 2. Update Names and Scores
+            player1.score = room.score1;
+            player2.score = room.score2;
+            player1ScoreEl.textContent = room.score1;
+            player2ScoreEl.textContent = room.score2;
+            player1.name = room.player1Name || 'P1';
+            player2.name = room.player2Name || 'P2';
+
+            // 3. Update Status and Paddle Positions
+            let statusText = `Room ID: ${currentRoomId}. Status: ${room.status.toUpperCase()}.`;
+            
+            if (currentPlayerRole === 'P1') {
+                player1.y = room.p1Y; 
+                player2.y = room.p2Y; 
+                statusText += ` Opponent: ${room.player2Name || 'Waiting...'}`;
+                playerRoleEl.textContent = `P1 (${room.player1Name})`;
+            } else if (currentPlayerRole === 'P2') {
+                player2.y = room.p2Y; 
+                player1.y = room.p1Y; 
+                statusText += ` Opponent: ${room.player1Name || 'Error'}`;
+                playerRoleEl.textContent = `P2 (${room.player2Name})`;
+            }
+            roomStatusEl.textContent = statusText;
+
+            // 4. Handle Game Flow
+            if (room.status === 'waiting') {
+                resetGameAndUI(false); // Only reset local game, don't touch scores/names
+                startMessage.textContent = `ROOM: ${currentRoomId}. WAITING FOR OPPONENT...`;
+            } else if (room.status === 'ready') {
+                 resetGameAndUI(false); // Only reset local game, don't touch scores/names
+                startMessage.textContent = "OPPONENT FOUND! CLICK TO START";
+            } else if (room.status === 'playing') {
+                // Sync ball state for P2
+                if (currentPlayerRole === 'P2') {
+                    ball.x = room.ballX;
+                    ball.y = room.ballY;
+                    ball.dx = room.ballDX;
+                    ball.dy = room.ballDY;
+                    ball.speed = room.speed;
+                }
+                
+                if (!config.gameRunning) {
+                    startGame(); 
+                }
+            } else if (room.status === 'finished') {
+                config.gameRunning = false;
+
+                // Game Over
+                let winnerName = (room.score1 > room.score2) ? player1.name : player2.name;
+                
+                // Only P1 submits the score to the global leaderboard once
+                if (currentPlayerRole === 'P1' && (room.score1 === config.scoreToWin || room.score2 === config.scoreToWin)) {
+                     submitScore(player1.name, player2.name, room.score1, room.score2);
+                }
+
+                endGame(`${winnerName} WINS!`, room.score1, room.score2);
+            }
+        }
+        
+        // Firestore update functions (only used in PVP mode)
+        async function updateRoomPaddlePosition(yPosition) {
+            if (!currentRoomId || gameMode !== 'pvp') return;
+            
+            const roomRef = getRoomDocRef(currentRoomId);
+            const paddleField = (currentPlayerRole === 'P1') ? 'p1Y' : 'p2Y';
+
+            try {
+                await updateDoc(roomRef, { [paddleField]: yPosition });
+            } catch (error) {
+                // Ignore frequent warnings, but log critical errors
+                if (error.code !== 'unavailable' && error.code !== 'resource-exhausted') {
+                    console.warn("Failed to update paddle position (Check rules).", error); 
+                }
+            }
+        }
+
+        async function updateRoomBallState(newBall) {
+            if (!currentRoomId || currentPlayerRole !== 'P1' || gameMode !== 'pvp') return;
+            
+            const roomRef = getRoomDocRef(currentRoomId);
+            
+            try {
+                await updateDoc(roomRef, {
+                    ballX: newBall.x,
+                    ballY: newBall.y,
+                    ballDX: newBall.dx,
+                    ballDY: newBall.dy,
+                    speed: newBall.speed,
+                    timestamp: serverTimestamp() 
+                });
+            } catch (error) {
+                // Ignore frequent warnings, but log critical errors
+                if (error.code !== 'unavailable' && error.code !== 'resource-exhausted') {
+                    console.warn("Failed to update ball state (Check rules).", error); 
+                }
+            }
+        }
+        
+        async function updateRoomStatus(newStatus) {
+            if (!currentRoomId || currentPlayerRole !== 'P1' || gameMode !== 'pvp') return;
+            
+            const roomRef = getRoomDocRef(currentRoomId);
+            try {
+                await updateDoc(roomRef, { status: newStatus });
+            } catch (error) {
+                console.error("Failed to update room status (Check Security Rules!):", error);
+            }
+        }
+        
+        async function updateRoomScores(p1Score, p2Score) {
+            if (!currentRoomId || currentPlayerRole !== 'P1' || gameMode !== 'pvp') return;
+            
+            const roomRef = getRoomDocRef(currentRoomId);
+            try {
+                await updateDoc(roomRef, { 
+                    score1: p1Score,
+                    score2: p2Score,
+                    ballDX: 0,
+                    ballDY: 0,
+                });
+            } catch (error) {
+                console.error("Failed to update scores (Check Security Rules!):", error);
+            }
+        }
+        
+        // --- Game Setup and Graphics ---
+
+        function resizeCanvas() {
+            // Check if canvas is in the DOM and visible before calculating size
+            const container = canvas.parentElement?.parentElement; 
+            if (!container) {
+                return;
+            }
+            
+            const containerRect = container.getBoundingClientRect();
+            
+            canvas.width = containerRect.width;
+            canvas.height = containerRect.height;
+            
+            const height = canvas.height;
+            paddleWidth = height * config.paddleWidthRatio;
+            paddleHeight = height * config.paddleHeightRatio;
+            ballSize = height * config.ballSizeRatio;
+            speedIncrement = (config.maxSpeed - config.initialSpeed) / config.scoreToWin;
+
+            player1.x = paddleWidth;
+            player2.x = canvas.width - paddleWidth * 2;
+            
+            // Re-center if the game is paused
+            if (!config.gameRunning) {
+                player1.y = (canvas.height - paddleHeight) / 2;
+                player2.y = (canvas.height - paddleHeight) / 2;
+                resetBallLocally();
+            }
+        }
+
+        function resetBallLocally(scoringPlayer = 'P1') {
+            let direction = (scoringPlayer === 'P1') ? 1 : -1;
+            
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.speed = config.initialSpeed;
+            
+            let angle = Math.random() * (Math.PI / 2) - (Math.PI / 4);
+            
+            ball.dx = ball.speed * Math.cos(angle) * direction;
+            ball.dy = ball.speed * Math.sin(angle);
+            ball.color = (direction > 0) ? player2.color : player1.color;
+
+            // Ball is static until startGame is called
+            ball.dx = 0;
+            ball.dy = 0;
+        }
+
+        /**
+         * Resets all local game state (scores, positions) and UI elements.
+         * @param {boolean} resetScores - Whether to reset the scores. Should be true for a new game, false for mid-game syncs.
+         */
+        function resetGameAndUI(resetScores = true) {
+            // 1. Reset Game State
+            config.gameRunning = false;
+            
+            player1.y = (canvas.height - paddleHeight) / 2;
+            player2.y = (canvas.height - paddleHeight) / 2;
+            resetBallLocally();
+            
+            // 2. Reset Scores (if requested)
+            if (resetScores) {
+                player1.score = 0;
+                player2.score = 0;
+                player1ScoreEl.textContent = '0';
+                player2ScoreEl.textContent = '0';
+            }
+
+            // 3. Reset UI
+            startMessage.classList.remove('hidden');
+            gameOverModal.classList.add('hidden');
+            document.getElementById('submissionStatus').textContent = '';
+            
+            // 4. Redraw
+            draw();
+        }
+
+
+        function drawPaddle(x, y, color) {
+            ctx.fillStyle = color;
+            ctx.shadowColor = color;
+            // Increased glow for CRT effect
+            ctx.shadowBlur = 15; 
+            ctx.fillRect(x, y, paddleWidth, paddleHeight);
+            ctx.shadowBlur = 0;
+        }
+
+        function drawBall() {
+            ctx.fillStyle = ball.color;
+            ctx.shadowColor = ball.color;
+            // Increased glow for CRT effect
+            ctx.shadowBlur = 20; 
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ballSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawCourt() {
+            ctx.strokeStyle = config.neonGreen;
+            ctx.setLineDash([10, 10]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawCourt();
+            drawPaddle(player1.x, player1.y, player1.color);
+            drawPaddle(player2.x, player2.y, player2.color);
+            drawBall();
+        }
+        
+        // --- Core Game Loop ---
+        
+        function botMovement() {
+            // Bot (player 2) tracks the ball position
+            const targetY = ball.y - paddleHeight / 2;
+            const paddleCenter = player2.y + paddleHeight / 2;
+            const deltaY = targetY - paddleCenter;
+            
+            // Apply bot inaccuracy (makes it miss perfectly centered shots sometimes)
+            const targetYAdjusted = ball.y * botInaccuracy + (canvas.height / 2) * (1 - botInaccuracy);
+            const effectiveDeltaY = targetYAdjusted - paddleCenter;
+
+            const moveSpeed = canvas.height * botSpeed;
+
+            if (effectiveDeltaY > moveSpeed) {
+                player2.y += moveSpeed;
+            } else if (effectiveDeltaY < -moveSpeed) {
+                player2.y -= moveSpeed;
+            } else {
+                player2.y += effectiveDeltaY; // Small correction
+            }
+            
+            // Keep paddle within bounds
+            player2.y = Math.max(0, Math.min(player2.y, canvas.height - paddleHeight));
+        }
+
+        function update() {
+            if (!config.gameRunning) return;
+
+            const paddleMoveSpeed = canvas.height * 0.03; 
+            let localPaddle = (currentPlayerRole === 'P1' || gameMode === 'bot') ? player1 : player2;
+            
+            // 1. Update Local Paddle Position (Player)
+            if (keysPressed['w']) {
+                localPaddle.y -= paddleMoveSpeed;
+            } else if (keysPressed['s']) {
+                localPaddle.y += paddleMoveSpeed;
+            }
+            localPaddle.y = Math.max(0, Math.min(localPaddle.y, canvas.height - paddleHeight));
+            
+            // Sync player paddle position if PVP
+            if (gameMode === 'pvp') {
+                updateRoomPaddlePosition(localPaddle.y);
+            }
+            
+            // 2. Bot Movement (If in Bot Mode)
+            if (gameMode === 'bot') {
+                botMovement();
+            }
+            
+            // 3. Ball Physics (P1 is Authoritative for PVP, Local Player is Authoritative for Bot)
+            if (gameMode === 'bot' || (gameMode === 'pvp' && currentPlayerRole === 'P1')) {
+                
+                ball.x += ball.dx;
+                ball.y += ball.dy;
+
+                // Wall Collision (Top and Bottom)
+                if (ball.y - ballSize < 0 || ball.y + ballSize > canvas.height) {
+                    ball.dy *= -1;
+                }
+                
+                // Paddle Collision (P1 - Left)
+                if (ball.x - ballSize < player1.x + paddleWidth && ball.x + ballSize > player1.x && 
+                    ball.y + ballSize > player1.y && ball.y - ballSize < player1.y + paddleHeight && ball.dx < 0) {
+                    
+                    ball.dx *= -1;
+                    
+                    let hitPoint = (ball.y - (player1.y + paddleHeight / 2)) / (paddleHeight / 2);
+                    let maxAngle = Math.PI / 4;
+                    ball.dy = ball.speed * Math.sin(hitPoint * maxAngle);
+                    ball.dx = Math.sqrt(ball.speed * ball.speed - ball.dy * ball.dy); 
+
+                    ball.speed = Math.min(ball.speed + speedIncrement, config.maxSpeed);
+                    ball.dx = ball.speed * (ball.dx / Math.abs(ball.dx)); 
+
+                    ball.color = player1.color;
+                }
+
+                // Paddle Collision (P2 - Right)
+                if (ball.x + ballSize > player2.x && ball.x - ballSize < player2.x + paddleWidth && 
+                    ball.y + ballSize > player2.y && ball.y - ballSize < player2.y + paddleHeight && ball.dx > 0) {
+                    
+                    ball.dx *= -1;
+
+                    let hitPoint = (ball.y - (player2.y + paddleHeight / 2)) / (paddleHeight / 2);
+                    let maxAngle = Math.PI / 4;
+                    ball.dy = ball.speed * Math.sin(hitPoint * maxAngle);
+                    
+                    ball.dx = -Math.sqrt(ball.speed * ball.speed - ball.dy * ball.dy); 
+
+                    ball.speed = Math.min(ball.speed + speedIncrement, config.maxSpeed);
+                    ball.dx = ball.speed * (ball.dx / Math.abs(ball.dx));
+
+                    ball.color = player2.color;
+                }
+
+                // Scoring
+                let gameFinished = false;
+                if (ball.x - ballSize < 0) {
+                    player2.score++;
+                    if (player2.score >= config.scoreToWin) {
+                        gameFinished = true;
+                    } else {
+                        resetBallLocally('P2');
+                    }
+                }
+
+                if (ball.x + ballSize > canvas.width) {
+                    player1.score++;
+                    if (player1.score >= config.scoreToWin) {
+                        gameFinished = true;
+                    } else {
+                        resetBallLocally('P1');
+                    }
+                }
+                
+                // Update scores and ball state in the respective modes
+                if (gameMode === 'pvp' && currentPlayerRole === 'P1') {
+                    if (gameFinished) {
+                        updateRoomStatus('finished'); 
+                    } else {
+                        updateRoomScores(player1.score, player2.score); 
+                        updateRoomBallState(ball);
+                    }
+                } else if (gameMode === 'bot') {
+                    player1ScoreEl.textContent = player1.score;
+                    player2ScoreEl.textContent = player2.score;
+                    if (gameFinished) {
+                        let winnerName = (player1.score > player2.score) ? player1.name : player2.name;
+                        submitScore(player1.name, player2.name, player1.score, player2.score);
+                        endGame(`${winnerName} WINS!`, player1.score, player2.score);
+                    }
+                }
+            } 
+        }
+
+        function startGame() {
+            if (config.gameRunning || !currentRoomId) return;
+
+            config.gameRunning = true;
+            startMessage.classList.add('hidden');
+
+            if (gameMode === 'pvp' && currentPlayerRole === 'P1') {
+                updateRoomStatus('playing');
+                resetBallLocally('P1');
+                updateRoomBallState(ball);
+            } else if (gameMode === 'bot') {
+                resetBallLocally('P1'); 
+            }
+        }
+        
+        function endGame(message, p1Score, p2Score) {
+            config.gameRunning = false;
+            
+            modalText.textContent = message;
+            gameOverModal.classList.remove('hidden');
+            
+            // Clear submission status for the next game
+            document.getElementById('submissionStatus').textContent = '';
+            
+            restartButton.textContent = (gameMode === 'pvp') ? "PLAY AGAIN (IN ROOM)" : "PLAY AGAIN (BOT)";
+        }
+        
+        function gameLoop() {
+            update();
+            draw();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+        
+        // --- Event Listeners ---
+
+        window.addEventListener('keydown', (e) => {
+            keysPressed[e.key.toLowerCase()] = true;
+            if (e.key === ' ' && !config.gameRunning && currentRoomId) {
+                startGame(); 
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keysPressed[e.key.toLowerCase()] = false;
+        });
+        
+        function setPaddleYFromTouch(touchY) {
+            let localPaddle = (currentPlayerRole === 'P1' || gameMode === 'bot') ? player1 : player2;
+            const canvasRect = canvas.getBoundingClientRect();
+            let newY = touchY - canvasRect.top - (paddleHeight / 2);
+            localPaddle.y = Math.max(0, Math.min(newY, canvas.height - paddleHeight));
+            if (gameMode === 'pvp') { updateRoomPaddlePosition(localPaddle.y); }
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!config.gameRunning && currentRoomId) {
+                startGame();
+                return;
+            }
+            
+            // Touch control is only for P1 in PVP, or the local player (P1) in Bot mode.
+            if (currentPlayerRole === 'P1' || gameMode === 'bot') {
+                setPaddleYFromTouch(e.touches[0].clientY);
+                window.touchActive = true;
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (window.touchActive && config.gameRunning) {
+                // Ensure touch control only works for the correct paddle side (P1/Left)
+                if (currentPlayerRole === 'P1' || gameMode === 'bot') {
+                    setPaddleYFromTouch(e.touches[0].clientY);
+                }
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (e.touches.length === 0) { window.touchActive = false; }
+        });
+
+        canvas.addEventListener('click', (e) => {
+            if (!config.gameRunning && currentRoomId) { startGame(); }
+        });
+
+        restartButton.addEventListener('click', () => {
+            if (gameMode === 'pvp') {
+                if (currentPlayerRole === 'P1') {
+                    // P1 signals readiness in the room, the listener handles reset
+                    updateRoomStatus('ready');
+                } else {
+                    modalText.textContent = "Waiting for Player 1 to restart the game...";
+                }
+            } else if (gameMode === 'bot') {
+                // Completely reset local state for bot game
+                startBotGameMode(); 
+            }
+            gameOverModal.classList.add('hidden');
+        });
+        
+        // Multiplayer/Mode Controls
+        playBotButton.addEventListener('click', startBotGameMode);
+        createRoomButton.addEventListener('click', createRoom);
+        joinRoomButton.addEventListener('click', joinRoom);
+        leaveRoomButton.addEventListener('click', () => {
+            if (gameMode === 'pvp') {
+                leaveRoom();
+            } else if (gameMode === 'bot') {
+                stopBotGame();
+            }
+        });
+        
+        // Auth Modal Listeners
+        googleSignInButton.addEventListener('click', handleGoogleSignIn);
+        signUpButton.addEventListener('click', () => handleEmailAuth(true));
+        signInButton.addEventListener('click', () => handleEmailAuth(false));
+        anonymousSignInButton.addEventListener('click', handleAnonymousSignIn);
+
+
+        // --- Global Initialization ---
+
+        window.addEventListener('resize', resizeCanvas);
+        
+        window.onload = function() {
+            initializeFirebase();
+            resizeCanvas();
+            resetGameAndUI(); // Initial reset to ensure a clean start screen
+            
+            // Start the game loop once. It will run continuously, only update() physics stops when !config.gameRunning.
+            gameLoop(); 
+            
+            // Start the clock
+            setInterval(updateClock, 1000);
+            updateClock();
+            
+            // Initial UI state
+            updateRoomUI();
+        };
+        
+        const initializeFirebase = async () => {
+            try {
+                // 1. Initialize services
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // 2. Set up the state listener BEFORE attempting custom sign-in
+                onAuthStateChanged(auth, handleAuthStateChange);
+
+                // 3. Attempt initial sign-in logic (custom token or anonymous fallback)
+                const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+                if (initialToken) {
+                    await signInWithCustomToken(auth, initialToken);
+                } else {
+                    // Fallback to anonymous sign-in if no token exists
+                    await signInAnonymously(auth);
+                }
+                
+                // Note: setupLeaderboardListener is called inside handleAuthStateChange once the user is ready.
+                
+            } catch (error) {
+                console.error("Firebase full initialization error (config or core):", error);
+                authStatusTextEl.textContent = `Connection Error: ${error.message}`;
+            }
+        };
+
+    </script>
+</body>
+</html>
